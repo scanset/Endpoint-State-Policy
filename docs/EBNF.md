@@ -45,7 +45,7 @@ All elements are case-sensitive.
 
 ### Reserved Keywords
 
-**Structure:** `DEF`, `VAR`, `STATE`, `OBJECT`, `CTN`, `CRI`, `SET`, `RUN`, `TEST`, `FILTER`, `META`, `parameters`, `select`, `record`, `field`, `behavior`
+**Structure:** `DEF`, `VAR`, `STATE`, `OBJECT`, `CTN`, `CRI`, `SET`, `RUN`, `TEST`, `FILTER`, `META`, `parameters`, `select`, `record`, `behavior`
 
 **End markers:** `DEF_END`, `STATE_END`, `OBJECT_END`, `CTN_END`, `CRI_END`, `SET_END`, `RUN_END`, `FILTER_END`, `META_END`, `parameters_end`, `select_end`, `record_end`
 
@@ -53,13 +53,33 @@ All elements are case-sensitive.
 
 **Module fields:** `module_name`, `verb`, `noun`, `module_id`, `module_version`
 
-**RUN parameters:** `literal`, `pattern`, `delimiter`, `character`, `start`, `length`
+**Logical/State operators:** `AND`, `OR`, `ONE`
 
-**Operators:** `AND`, `OR`, `ONE`, `=`, `!=`, `>`, `<`, `>=`, `<=`, `ieq`, `ine`, `contains`, `starts`, `ends`, `not_contains`, `not_starts`, `not_ends`, `subset_of`, `superset_of`, `pattern_match`, `matches`, `+`, `-`, `*`, `/`, `%`
+**RUN operations:** `CONCAT`, `SPLIT`, `SUBSTRING`, `REGEX_CAPTURE`, `ARITHMETIC`, `COUNT`, `UNIQUE`, `END`, `MERGE`, `EXTRACT`
+
+**SET operations:** `union`, `intersection`, `complement`
 
 **Filter actions:** `include`, `exclude`
 
-**Existence/Item checks:** `all`, `any`, `none`, `at_least_one`, `only_one`, `none_satisfy`
+**Existence checks:** `all`, `any`, `none`, `at_least_one`, `only_one`
+
+**Item checks:** `all`, `at_least_one`, `only_one`, `none_satisfy`
+
+**Context-sensitive identifiers** (not keywords, semantic meaning in context):
+`literal`, `pattern`, `delimiter`, `character`, `start`, `length`, `field`
+
+**Data type identifiers** (not keywords, parsed as identifiers):
+`string`, `int`, `float`, `boolean`, `binary`, `record_data`, `version`, `evr_string`
+
+**Comparison operators:** `=`, `!=`, `>`, `<`, `>=`, `<=`
+
+**String operators:** `ieq`, `ine`, `contains`, `starts`, `ends`, `not_contains`, `not_starts`, `not_ends`
+
+**Pattern operators:** `pattern_match`, `matches`
+
+**Set operators:** `subset_of`, `superset_of`
+
+**Arithmetic operators:** `+`, `-`, `*`, `/`, `%`
 
 ### Numeric Limits
 
@@ -136,7 +156,7 @@ state_content ::= (state_field | record_check)+
 state_field ::= identifier space data_type space operation space value_spec statement_end
 
 (* Record checks for structured data validation *)
-record_check ::= "record" space data_type? statement_end
+record_check ::= "record" (space data_type)? statement_end
                  record_content
                  "record_end" statement_end
 
@@ -147,11 +167,13 @@ direct_operation ::= operation space value_spec statement_end
 record_field ::= "field" space field_path space data_type space operation
                  space value_spec (space entity_check)? statement_end
 
+(* Note: "field" is a context-sensitive identifier, not a keyword *)
+
 field_path ::= path_component ("." path_component)*
 
-path_component ::= identifier | array_access | wildcard
+path_component ::= identifier | index | wildcard
 
-array_access ::= identifier "[" (integer_value | "*") "]"
+index ::= [0-9]+
 
 wildcard ::= "*"
 ```
@@ -240,7 +262,7 @@ test_spec ::= "TEST" space existence_check space item_check
 
 existence_check ::= "all" | "any" | "none" | "at_least_one" | "only_one"
 
-item_check ::= "all" | "any" | "none" | "at_least_one" | "only_one" | "none_satisfy"
+item_check ::= "all" | "at_least_one" | "only_one" | "none_satisfy"
 
 state_operator ::= "AND" | "OR" | "ONE"
 
@@ -323,7 +345,7 @@ direct_value ::= backtick_string | raw_string | multiline_string | raw_multiline
 variable_reference ::= "VAR" space identifier
 
 data_type ::= "string" | "int" | "float" | "boolean" | "binary"
-            | "record" | "record_type" | "version" | "evr_string"
+            | "record_data" | "version" | "evr_string"
 
 operation ::= comparison_op | string_op | set_op | pattern_op
 
@@ -493,9 +515,9 @@ DEF
     OBJECT_END
 
     STATE json_valid
-        record record_type
+        record
             field settings.security.enabled boolean = true
-            field users[*].role string = `admin` at_least_one
+            field users.*.role string = `admin` at_least_one
         record_end
     STATE_END
 
@@ -516,7 +538,7 @@ DEF
             OBJECT_REF ssh_config
         CTN_END
 
-        CTN json_check
+        CTN json_record
             TEST all all
             STATE_REF json_valid
             OBJECT_REF config_json
@@ -524,7 +546,7 @@ DEF
 
         # Nested criteria
         CRI OR
-            CTN set_check
+            CTN file_metadata
                 TEST any all
                 STATE_REF size_check
                 OBJECT

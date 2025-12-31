@@ -257,14 +257,14 @@ CTN_END
 | | `at_least_one` | One or more must exist |
 | | `only_one` | Exactly one must exist |
 | Item | `all` | All existing objects must pass |
-| | `any` | At least one must pass |
-| | `none` | None should pass (inverted check) |
-| | `at_least_one` | One or more must pass |
+| | `at_least_one` | At least one must pass |
 | | `only_one` | Exactly one must pass |
 | | `none_satisfy` | No objects satisfy the state |
 | State Operator | `AND` | All state fields must match (default) |
 | | `OR` | Any state field can match |
 | | `ONE` | Exactly one state field must match |
+
+**Note:** Item checks do NOT include `any` or `none` — use `at_least_one` or `none_satisfy` instead.
 
 **Example with state operator:**
 
@@ -574,34 +574,67 @@ Common patterns:
 
 ### Record Checks
 
-Validate structured configuration data (JSON, INI, etc.):
+Validate structured data (JSON, configuration files, API responses):
 
 ```esp
 STATE json_config_valid
-    record record_type
+    record
         field settings.enabled boolean = true
         field settings.timeout int > 30
-        field users[*].role string = `admin` at_least_one
-        field items[0].name string = `primary`
+        field users.*.role string = `admin` at_least_one
+        field items.0.name string = `primary`
     record_end
 STATE_END
 ```
 
-**Field path syntax:**
-- `settings.enabled` — Nested field access
-- `users[*]` — Wildcard array (check all elements)
-- `items[0]` — Specific array index
-
-**Entity checks** (for array wildcards):
-- `all` — All array elements must match
-- `at_least_one` — At least one element must match
-- `none` — No elements should match
-- `only_one` — Exactly one element must match
-
-**Direct record operation:**
+**Record block syntax:**
 
 ```esp
-STATE simple_record
+record [data_type]
+    field path type operation value [entity_check]
+    ...
+record_end
+```
+
+The data type after `record` is optional. When present, it specifies the expected data format.
+
+**Note:** `field` is a context-sensitive identifier, not a keyword. It has special meaning only inside record blocks.
+
+**Field path syntax:**
+
+| Syntax | Meaning | Example |
+|--------|---------|---------|
+| `name` | Simple field | `status` |
+| `a.b.c` | Nested field | `settings.security.enabled` |
+| `arr.0` | Array index | `containers.0.image` |
+| `arr.*` | Array wildcard | `containers.*.name` |
+| `a.*.b` | Nested wildcard | `spec.containers.*.ports.*.containerPort` |
+
+**Entity checks** (only valid on record fields with wildcards or arrays):
+
+| Check | Passes When |
+|-------|-------------|
+| `all` | All matching elements pass (default) |
+| `at_least_one` | At least one element passes |
+| `none` | No elements pass |
+| `only_one` | Exactly one element passes |
+
+**Kubernetes example:**
+
+```esp
+STATE uses_rbac
+    record
+        field spec.containers.0.command string contains `--authorization-mode=Node,RBAC` at_least_one
+    record_end
+STATE_END
+```
+
+This checks if ANY element in the `command` array contains the RBAC flag.
+
+**Direct record operation** (validate entire record):
+
+```esp
+STATE has_required_content
     record string
         contains `required_value`
     record_end
@@ -749,6 +782,16 @@ Compute values at runtime:
 | `EXTRACT` | Get field from object | Access collected data |
 | `END` | Get string suffix | Extract file extension |
 
+**Context-sensitive identifiers in RUN blocks:**
+
+The following are identifiers with special meaning inside RUN blocks (not keywords):
+- `literal` — Literal value parameter
+- `pattern` — Regex pattern
+- `delimiter` — Split delimiter
+- `character` — Character specification
+- `start` — Start position
+- `length` — Length value
+
 **CONCAT example:**
 
 ```esp
@@ -852,10 +895,11 @@ exit 0
 | `float` | 64-bit floating point | `3.14159` |
 | `boolean` | True/false | `true` |
 | `binary` | Raw byte data | File contents |
-| `record` | Structured data | JSON/INI fields |
-| `record_type` | Record type specifier | Used in record checks |
+| `record_data` | Structured data (JSON, etc.) | Nested fields |
 | `version` | Semantic version | `2.4.1` |
 | `evr_string` | Package version (epoch:version-release) | `2:1.8.0-1.el9` |
+
+Data types are identifiers, not keywords — they're parsed semantically based on context.
 
 ---
 
@@ -881,7 +925,7 @@ DEF
     OBJECT_END
 
     STATE complexity_requirements
-        record record_type
+        record
             field minlen int >= 15
             field dcredit int = -1
             field ucredit int = -1
@@ -943,6 +987,45 @@ DEF
     CRI_END
 DEF_END
 ```
+
+### Kubernetes STIG: API Server RBAC
+
+```esp
+META
+    esp_scan_id `stig-v242382-rbac-auth`
+    control_framework `DISA-STIG`
+    control `V-242382`
+    title `Kubernetes API Server must have RBAC authorization enabled`
+    platform `kubernetes`
+    criticality `high`
+    agent_type `controller`
+    tags `stig,kubernetes,apiserver,authorization,rbac`
+META_END
+
+DEF
+    OBJECT apiserver_pod
+        kind `Pod`
+        namespace `kube-system`
+        label_selector `component=kube-apiserver`
+    OBJECT_END
+
+    STATE uses_rbac
+        record
+            field spec.containers.0.command string contains `--authorization-mode=Node,RBAC` at_least_one
+        record_end
+    STATE_END
+
+    CRI AND
+        CTN k8s_resource
+            TEST all all
+            STATE_REF uses_rbac
+            OBJECT_REF apiserver_pod
+        CTN_END
+    CRI_END
+DEF_END
+```
+
+This policy validates that the Kubernetes API server pod has RBAC authorization enabled by checking if any element in the container's command array contains the required flag.
 
 ---
 
