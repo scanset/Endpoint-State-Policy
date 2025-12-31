@@ -1,0 +1,18 @@
+[package]
+name = "scanner"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "ESP Scanner CLI - Compliance scanning for ESP policy files"
+
+[dependencies]
+common.workspace = true
+contract_kit.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "esp_scanner"
+path = "src/main.rs"

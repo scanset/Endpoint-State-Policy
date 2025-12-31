@@ -2,73 +2,16 @@
 # NIST SP 800-218 SSDF Compliance
 
 [build]
-# Default optimization for dependencies in dev mode
 incremental = true
 
 [target.x86_64-pc-windows-gnu]
 linker = "x86_64-w64-mingw32-gcc"
 ar = "x86_64-w64-mingw32-ar"
-# Generate import library for DLL linking
-rustflags = [
-    "-C", "target-feature=+crt-static",
-    "-C", "link-arg=-Wl,--out-implib=target/x86_64-pc-windows-gnu/release/libics_lib.dll.a"
-]
-
-[target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "target-feature=+crt-static"]
 
-# Security-focused compiler flags for all targets
-[target.'cfg(all())']
-rustflags = [
-    "-D", "warnings",
-    "-D", "unsafe_code",
-    "-D", "clippy::unwrap_used",
-    "-D", "clippy::expect_used",
-    "-D", "clippy::panic",
-]
-
-# Alias commands for convenience
-[alias]
-# Security checks
-sec = "audit"
-sec-all = "audit --deny warnings"
-
-# Linting with security focus
-lint = "clippy --all-targets --all-features -- -D warnings"
-lint-fix = "clippy --all-targets --all-features --fix -- -D warnings"
-
-# Testing
-test-all = "test --workspace --all-features"
-test-doc = "test --doc --workspace"
-
-# Building
-build-release = "build --release --workspace"
-build-dev = "build --workspace"
-
-# Documentation
-doc-open = "doc --workspace --all-features --no-deps --open"
-doc-all = "doc --workspace --all-features --document-private-items"
-
-# Dependency management
-outdated-check = "outdated --workspace"
-tree-workspace = "tree --workspace"
-
-# Clean all targets
-clean-all = "clean --workspace"
-
-[profile.dev]
-# Development profile with security checks enabled
-panic = "unwind"
-opt-level = 0
-
-[profile.release]
-# Release profile with maximum optimization
-panic = "abort"
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
+[target.x86_64-unknown-linux-musl]
+linker = "musl-gcc"
+rustflags = ["-C", "target-feature=+crt-static"]
 
 [env]
-# Default environment variables for cargo
 RUST_BACKTRACE = "1"

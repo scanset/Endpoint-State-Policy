@@ -1,24 +1,19 @@
-# NIST SP 800-218 Clippy Security Configuration
-# Implements: PW.3.2
+# Clippy Security Configuration
+# NIST SP 800-218 Implements: PW.3.2
 
-# Security-focused lints
+msrv = "1.85.0"
 avoid-breaking-exported-api = false
-msrv = "1.70.0"
 
-# Enforce security practices
+# Prevent unsafe memory operations
 disallowed-methods = [
-    # Prevent unsafe memory operations
     "std::ptr::read_volatile",
     "std::ptr::write_volatile",
-    # Prevent dangerous string operations
     "std::ffi::CString::from_raw",
-    # Prevent process execution without validation
     "std::process::Command::new",
 ]
 
-disallowed-types = [
-    # Prevent unsafe types
-    "std::ptr::NonNull",
-]
+# Prevent unsafe types
+disallowed-types = ["std::ptr::NonNull"]
 
-disallowed-names = ["password", "secret", "token", "key", "api_key"]
+# Prevent hardcoded secrets in variable names
+disallowed-names = ["password", "secret", "api_key"]

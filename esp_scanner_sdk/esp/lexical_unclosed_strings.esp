@@ -1,5 +1,0 @@
-# File with unclosed string literals
-DEF
-VAR test_var string `unclosed string
-VAR another_var string `properly closed`
-DEF_END

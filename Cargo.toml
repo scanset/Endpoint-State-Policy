@@ -1,10 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "esp_compiler",
-    "esp_scanner_base",
-    "esp_scanner_sdk",
-]
+members = ["common", "compiler", "agent_core", "contract_kit", "scanner"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,8 +19,10 @@ toml = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Workspace-internal dependencies
-esp_compiler = { path = "esp_compiler" }
-esp_scanner_base = { path = "esp_scanner_base" }
+common = { path = "common" }
+compiler = { path = "compiler" }
+agent_core = { path = "agent_core" }
+contract_kit = { path = "contract_kit" }
 
 [profile.dev]
 opt-level = 0

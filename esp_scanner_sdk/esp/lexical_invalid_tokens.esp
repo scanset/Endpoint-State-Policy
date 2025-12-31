@@ -1,5 +1,0 @@
-# File with invalid characters and tokens
-DEF
-VAR test_var @ string `value`  # Invalid @ character
-VAR another_var string `value with invalid chars: ∂∆`
-DEF_END

@@ -1,7 +1,0 @@
-{
-  "service_name": "web-server",
-  "port": 8080,
-  "ssl_enabled": true,
-  "max_connections": 1000,
-  "log_level": "INFO"
-}

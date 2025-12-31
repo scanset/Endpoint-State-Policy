@@ -1,0 +1,24 @@
+[package]
+name = "contract_kit"
+version.workspace = true
+edition.workspace = true
+authors = ["ESP Team"]
+description = "ESP scanner CLI application"
+license.workspace = true
+
+
+[dependencies]
+# Depends on agent_core (which transitively gets compiler)
+agent_core.workspace = true
+common.workspace = true
+compiler.workspace = true
+
+# CLI-specific dependencies
+clap = { version = "4.4", features = ["derive"] }
+num_cpus = "1.16"
+log = "0.4"
+env_logger = "0.11"
+
+# Any other dependencies needed for the binary
+serde.workspace = true
+serde_json.workspace = true

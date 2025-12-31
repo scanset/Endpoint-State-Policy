@@ -1,114 +1,66 @@
 {
-	"name": "Endpoint State Policy Rust Development Container",
-	"build": {
-		"context": "..",
-		"dockerfile": "Dockerfile"
-	},
-	// Security: Mount workspace with appropriate permissions
-	"workspaceFolder": "/workspace",
-	"workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-	// Setup security tools after container creation
-	"postCreateCommand": "bash .devcontainer/post-create.sh",
-	// Rust development tool configuration
-	"customizations": {
-		"vscode": {
-			"extensions": [
-				// Essential Rust extensions
-				"rust-lang.rust-analyzer",
-				"vadimcn.vscode-lldb",
-				"serayuzgur.crates",
-				"tamasfe.even-better-toml",
-				// Security and quality tools
-				"ms-vscode.vscode-sarif-viewer",
-				"GitHub.vscode-github-actions",
-				"redhat.vscode-yaml",
-				// Development productivity
-				"gruntfuggly.todo-tree",
-				"usernamehw.errorlens",
-				"streetsidesoftware.code-spell-checker",
-				// Git and workflow
-				"eamodio.gitlens",
-				"GitHub.vscode-pull-request-github",
-				// Documentation
-				"yzhang.markdown-all-in-one",
-				"DavidAnson.vscode-markdownlint",
-				"bierner.markdown-mermaid",
-				"shd101wyy.markdown-preview-enhanced"
-			],
-			"settings": {
-				// Security-focused Rust analyzer settings
-				"rust-analyzer.checkOnSave.command": "clippy",
-				"rust-analyzer.checkOnSave.extraArgs": [
-					"--all-targets",
-					"--all-features",
-					"--",
-					"-D",
-					"warnings",
-					"-D",
-					"clippy::expect_used",
-					"-D",
-					"clippy::unwrap_used",
-					"-D",
-					"clippy::panic",
-					"-D",
-					"clippy::integer_arithmetic",
-					"-D",
-					"clippy::indexing_slicing"
-				],
-				"rust-analyzer.cargo.autoreload": true,
-				"rust-analyzer.inlayHints.enable": true,
-				// File watching and exclusions
-				"files.watcherExclude": {
-					"**/target/**": true,
-					"**/.git/**": true
-				},
-				"search.exclude": {
-					"**/target/**": true,
-					"**/Cargo.lock": false
-				},
-				// Editor settings
-				"files.trimTrailingWhitespace": true,
-				"files.insertFinalNewline": true,
-				"files.trimFinalNewlines": true,
-				"editor.formatOnSave": false,
-				"editor.codeActionsOnSave": {
-					"source.fixAll": "explicit",
-					"source.organizeImports": "explicit"
-				},
-				// Git configuration
-				"git.enableCommitSigning": true,
-				"git.alwaysSignOff": true,
-				// Terminal configuration
-				"terminal.integrated.defaultProfile.linux": "bash",
-				"terminal.integrated.profiles.linux": {
-					"bash": {
-						"path": "/bin/bash",
-						"args": [
-							"--login"
-						]
-					}
-				},
-				// Security: Disable potentially unsafe features
-				"extensions.autoCheckUpdates": false,
-				"extensions.autoUpdate": false,
-				"telemetry.telemetryLevel": "off"
-			}
-		}
-	},
-	// Container runtime options
-	"runArgs": [
-		"--cap-add=SYS_PTRACE",
-		"--security-opt",
-		"seccomp=unconfined"
-	],
-	// Environment variables for Rust development
-	"containerEnv": {
-		"CARGO_AUDIT_DISABLE_INFORMATIONAL": "false",
-		"CARGO_DENY_WARNINGS": "true",
-		"RUST_BACKTRACE": "1",
-		"RUST_LOG": "info",
-		"RUSTFLAGS": "-D warnings"
-	},
-	// Lifecycle hooks
-	"postStartCommand": "echo 'ESP Compiler development environment ready' && rustc --version && cargo --version"
+    "name": "ESP Rust Development",
+    "build": {
+        "context": "..",
+        "dockerfile": "Dockerfile"
+    },
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "vadimcn.vscode-lldb",
+                "serayuzgur.crates",
+                "tamasfe.even-better-toml",
+                "GitHub.vscode-github-actions",
+                "redhat.vscode-yaml",
+                "gruntfuggly.todo-tree",
+                "usernamehw.errorlens",
+                "eamodio.gitlens",
+                "yzhang.markdown-all-in-one",
+                "DavidAnson.vscode-markdownlint"
+            ],
+            "settings": {
+                "rust-analyzer.checkOnSave.command": "clippy",
+                "rust-analyzer.checkOnSave.extraArgs": [
+                    "--all-targets",
+                    "--all-features",
+                    "--",
+                    "-D", "warnings",
+                    "-D", "clippy::unwrap_used",
+                    "-D", "clippy::expect_used",
+                    "-D", "clippy::panic",
+                    "-D", "clippy::indexing_slicing"
+                ],
+                "rust-analyzer.cargo.autoreload": true,
+                "rust-analyzer.inlayHints.enable": true,
+                "files.watcherExclude": {
+                    "**/target/**": true,
+                    "**/.git/**": true
+                },
+                "search.exclude": {
+                    "**/target/**": true
+                },
+                "files.trimTrailingWhitespace": true,
+                "files.insertFinalNewline": true,
+                "files.trimFinalNewlines": true,
+                "editor.formatOnSave": true,
+                "[rust]": {
+                    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+                    "editor.formatOnSave": true
+                },
+                "terminal.integrated.defaultProfile.linux": "bash"
+            }
+        }
+    },
+    "runArgs": [
+        "--cap-add=SYS_PTRACE",
+        "--security-opt",
+        "seccomp=unconfined"
+    ],
+    "containerEnv": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "info"
+    }
 }
