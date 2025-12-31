@@ -371,8 +371,8 @@ let result = ExecutionEngine::new(context, registry).execute()?;
 
 | Document | Audience | Description |
 |----------|----------|-------------|
-| [ESP Language Guide](docs/ESP_Language_Guide.pdf) | Policy Authors | Complete language reference |
-| [ESP Trust Model](docs/ESP_Trust_Model.md) | Security Teams | Trust boundaries and guarantees |
+| [ESP Language Guide](docs/ESP_Language_Guide.md) | Policy Authors | Complete language reference |
+| [ESP Trust Model](docs/Trust_Model.md) | Security Teams | Trust boundaries and guarantees |
 | [EBNF Grammar](docs/EBNF.md) | Language Implementers | Formal grammar specification |
 | [Scanner Development Guide](docs/Scanner_Development_Guide.md) | Scanner Developers | Building custom CTN types |
 | [common README](common/README.md) | Developers | Shared types and utilities |
