@@ -12,9 +12,11 @@ A hands-on tutorial for learning the Endpoint State Policy language.
 4. [Intermediate Patterns](#part-4-intermediate-patterns)
 5. [Advanced Techniques](#part-5-advanced-techniques)
 6. [Real-World Examples](#part-6-real-world-examples)
-7. [Troubleshooting](#part-7-troubleshooting)
-8. [Quick Reference](#part-8-quick-reference)
-9. [CTN Type Reference](#part-9-ctn-type-reference)
+7. [Cookbook: Common Patterns](#cookbook-common-patterns)
+8. [Troubleshooting](#part-7-troubleshooting)
+9. [Quick Reference](#part-8-quick-reference)
+10. [CTN Type Reference](#part-9-ctn-type-reference)
+11. [META Block Reference](#part-10-meta-block-reference)
 
 ---
 
@@ -1029,6 +1031,363 @@ This policy validates that the Kubernetes API server pod has RBAC authorization 
 
 ---
 
+## Cookbook: Common Patterns
+
+This section provides copy-paste solutions for common compliance scenarios.
+
+### Pattern 1: ALL Files Must Have Correct Permissions
+
+**Question:** "I need to check that ALL sensitive files have mode 0600."
+
+```esp
+STATE secure_permissions
+    permissions string = `0600`
+STATE_END
+
+OBJECT shadow_file
+    path `/etc`
+    filename `shadow`
+OBJECT_END
+
+OBJECT gshadow_file
+    path `/etc`
+    filename `gshadow`
+OBJECT_END
+
+SET sensitive_files union
+    shadow_file
+    gshadow_file
+SET_END
+
+CRI AND
+    CTN file_metadata
+        TEST all all          # ALL objects must exist AND ALL must pass
+        STATE_REF secure_permissions
+        SET_REF sensitive_files
+    CTN_END
+CRI_END
+```
+
+**Key insight:** `TEST all all` means "all objects must exist, and all must satisfy the state."
+
+### Pattern 2: AT LEAST ONE Service Must Be Running
+
+**Question:** "Either `firewalld` OR `iptables` must be running."
+
+```esp
+STATE service_active
+    status string = `active`
+STATE_END
+
+OBJECT firewalld
+    service_name `firewalld`
+OBJECT_END
+
+OBJECT iptables
+    service_name `iptables`
+OBJECT_END
+
+CRI AND
+    CTN systemd_service
+        TEST any at_least_one    # Any can exist, at least one must pass
+        STATE_REF service_active
+        OBJECT_REF firewalld
+        OBJECT_REF iptables
+    CTN_END
+CRI_END
+```
+
+**Key insight:** `TEST any at_least_one` means "any objects can exist, but at least one must satisfy the state."
+
+### Pattern 3: NO Prohibited Software Exists
+
+**Question:** "Ensure telnet is NOT installed."
+
+```esp
+STATE package_installed
+    installed boolean = true
+STATE_END
+
+OBJECT telnet_pkg
+    package_name `telnet`
+OBJECT_END
+
+CRI AND
+    CTN rpm_package
+        TEST none none_satisfy   # No objects should exist that satisfy the state
+        STATE_REF package_installed
+        OBJECT_REF telnet_pkg
+    CTN_END
+CRI_END
+```
+
+**Key insight:** `TEST none none_satisfy` means "no objects should exist, and if any do, none should satisfy the state."
+
+### Pattern 4: EXACTLY ONE Configuration Value
+
+**Question:** "There should be exactly one `authorized_keys` file for root."
+
+```esp
+STATE file_exists
+    exists boolean = true
+STATE_END
+
+OBJECT root_authkeys
+    path `/root/.ssh`
+    filename `authorized_keys`
+OBJECT_END
+
+CRI AND
+    CTN file_metadata
+        TEST only_one only_one   # Exactly one must exist AND exactly one must pass
+        STATE_REF file_exists
+        OBJECT_REF root_authkeys
+    CTN_END
+CRI_END
+```
+
+**Key insight:** `TEST only_one only_one` means "exactly one object must exist and exactly one must pass."
+
+### Pattern 5: Multiple Conditions with OR Logic
+
+**Question:** "Config must have EITHER setting A OR setting B."
+
+```esp
+STATE has_setting_a
+    content string contains `SettingA=enabled`
+STATE_END
+
+STATE has_setting_b
+    content string contains `SettingB=enabled`
+STATE_END
+
+OBJECT config_file
+    path `/etc`
+    filename `app.conf`
+OBJECT_END
+
+CRI AND
+    CTN file_content
+        TEST all all OR          # All objects, all must pass, states combined with OR
+        STATE_REF has_setting_a
+        STATE_REF has_setting_b
+        OBJECT_REF config_file
+    CTN_END
+CRI_END
+```
+
+**Key insight:** The `OR` state operator means "any of the referenced states can match."
+
+### Pattern 6: Multiple Conditions with AND Logic (Default)
+
+**Question:** "Config must have BOTH setting A AND setting B."
+
+```esp
+STATE has_setting_a
+    content string contains `SettingA=enabled`
+STATE_END
+
+STATE has_setting_b
+    content string contains `SettingB=enabled`
+STATE_END
+
+OBJECT config_file
+    path `/etc`
+    filename `app.conf`
+OBJECT_END
+
+CRI AND
+    CTN file_content
+        TEST all all             # AND is the default state operator
+        STATE_REF has_setting_a
+        STATE_REF has_setting_b
+        OBJECT_REF config_file
+    CTN_END
+CRI_END
+```
+
+**Key insight:** When no state operator is specified, `AND` is the default — all states must match.
+
+### Pattern 7: Filtering Objects Before Validation
+
+**Question:** "Check permissions only on executable files."
+
+```esp
+STATE is_executable
+    permissions string contains `x`
+STATE_END
+
+STATE secure_ownership
+    owner string = `root`
+STATE_END
+
+OBJECT bin_files
+    path `/usr/local/bin`
+    pattern `*`
+OBJECT_END
+
+CRI AND
+    CTN file_metadata
+        TEST all all
+        STATE_REF secure_ownership
+        OBJECT bin_files
+            FILTER include is_executable   # Only check files that are executable
+        OBJECT_END
+    CTN_END
+CRI_END
+```
+
+**Key insight:** `FILTER include state_name` keeps only objects that satisfy the state before validation.
+
+### Pattern 8: Excluding Objects from Validation
+
+**Question:** "Check all config files EXCEPT backups."
+
+```esp
+STATE is_backup
+    filename string ends `.bak`
+STATE_END
+
+STATE valid_syntax
+    content string pattern_match `^[^#].*=.*`
+STATE_END
+
+OBJECT config_files
+    path `/etc/myapp`
+    pattern `*.conf`
+OBJECT_END
+
+CRI AND
+    CTN file_content
+        TEST all all
+        STATE_REF valid_syntax
+        OBJECT config_files
+            FILTER exclude is_backup   # Skip backup files
+        OBJECT_END
+    CTN_END
+CRI_END
+```
+
+**Key insight:** `FILTER exclude state_name` removes objects that satisfy the state.
+
+### Pattern 9: Checking Array Elements (Entity Check)
+
+**Question:** "ALL ports in the list must be above 1024."
+
+```esp
+STATE valid_port
+    port int > 1024 ALL          # ALL elements must satisfy
+STATE_END
+```
+
+**Question:** "AT LEAST ONE container must have resource limits."
+
+```esp
+STATE has_limits
+    record
+        field spec.containers.*.resources.limits string != `` AT_LEAST_ONE
+    record_end
+STATE_END
+```
+
+**Entity check options:**
+- `ALL` — Every element must match
+- `AT_LEAST_ONE` — At least one element must match
+- `NONE` — No elements may match
+- `ONLY_ONE` — Exactly one element must match
+
+### Pattern 10: Complex Criteria Logic
+
+**Question:** "Pass if (A AND B) OR (C AND D)."
+
+```esp
+CRI OR
+    CRI AND
+        CTN file_metadata
+            TEST all all
+            STATE_REF state_a
+            OBJECT_REF object_a
+        CTN_END
+        CTN file_metadata
+            TEST all all
+            STATE_REF state_b
+            OBJECT_REF object_b
+        CTN_END
+    CRI_END
+
+    CRI AND
+        CTN file_metadata
+            TEST all all
+            STATE_REF state_c
+            OBJECT_REF object_c
+        CTN_END
+        CTN file_metadata
+            TEST all all
+            STATE_REF state_d
+            OBJECT_REF object_d
+        CTN_END
+    CRI_END
+CRI_END
+```
+
+**Key insight:** CRI blocks can be nested to create complex logic trees.
+
+### Pattern 11: Negating Criteria
+
+**Question:** "Pass only if the check FAILS."
+
+```esp
+CRI AND
+    CRI NOT                      # Negate the result
+        CTN file_metadata
+            TEST all all
+            STATE_REF should_not_exist
+            OBJECT_REF bad_file
+        CTN_END
+    CRI_END
+CRI_END
+```
+
+**Key insight:** `CRI NOT` inverts the result of its contents.
+
+### Pattern 12: Using Variables for Reusability
+
+**Question:** "Same threshold used in multiple states."
+
+```esp
+VAR min_password_length int 15
+VAR config_dir string `/etc/security`
+
+STATE password_length
+    minlen int >= VAR min_password_length
+STATE_END
+
+STATE lockout_threshold
+    deny int >= VAR min_password_length   # Reusing the same variable
+STATE_END
+
+OBJECT pwquality
+    path VAR config_dir
+    filename `pwquality.conf`
+OBJECT_END
+```
+
+**Key insight:** Variables enable consistent values across your policy.
+
+### Quick Reference: TEST Combinations
+
+| Scenario | TEST Specification |
+|----------|-------------------|
+| All must exist and pass | `TEST all all` |
+| Any can exist, all that exist must pass | `TEST any all` |
+| Any can exist, at least one must pass | `TEST any at_least_one` |
+| None should exist | `TEST none none_satisfy` |
+| Exactly one must exist and pass | `TEST only_one only_one` |
+| All must exist, at least one must pass | `TEST all at_least_one` |
+| At least one must exist and pass | `TEST at_least_one at_least_one` |
+
+---
+
 ## Part 7: Troubleshooting
 
 ### Common Syntax Errors
@@ -1196,6 +1555,98 @@ ESP_LOGGING_MIN_LEVEL=debug cargo run -- esp/set_test.esp
 
 # Batch scan
 cargo run -- esp/
+```
+
+---
+
+## Part 10: META Block Reference
+
+The META block provides metadata about your policy. It's optional for parsing but **required for attestation generation**.
+
+### Required Fields
+
+These four fields are **mandatory** for policies that will generate compliance attestations:
+
+| Field | Description | Format | Example |
+|-------|-------------|--------|---------|
+| `esp_scan_id` | Unique policy identifier | String | `stig-v242382-rbac` |
+| `platform` | Target platform | String | `linux`, `windows`, `kubernetes` |
+| `criticality` | Severity level | Enum | `critical`, `high`, `medium`, `low`, `info` |
+| `control_mapping` | Compliance framework mappings | `FRAMEWORK:CONTROL_ID,...` | `NIST-800-53:AC-6,CIS:5.1.1` |
+
+### Optional Fields
+
+| Field | Description | Format | Example |
+|-------|-------------|--------|---------|
+| `version` | Policy version | Semver | `1.2.0` |
+| `esp_version` | Required ESP version | Semver | `1.0` |
+| `author` | Author/team name | String | `security-team` |
+| `date` | Creation/update date | ISO 8601 | `2024-01-15` |
+| `description` | Human-readable description | String | Any text |
+| `title` | Short policy title | String | `SSH Root Login Disabled` |
+| `category` | Classification | String | `security`, `compliance` |
+| `tags` | Comma-separated tags | String | `ssh,hardening,linux` |
+| `agent_type` | Scanner agent type | String | `controller`, `node` |
+| `weight` | Explicit weight (0.0-1.0) | Float | `0.95` |
+
+### Control Mapping Format
+
+The `control_mapping` field uses a specific format: `FRAMEWORK:CONTROL_ID` pairs separated by commas.
+
+```esp
+META
+    control_mapping `NIST-800-53:AC-6,CIS:5.1.1,STIG:V-242382`
+META_END
+```
+
+This maps the policy to:
+- NIST 800-53 control AC-6
+- CIS Benchmark control 5.1.1
+- DISA STIG control V-242382
+
+### Complete META Block Example
+
+```esp
+META
+    esp_scan_id `rhel9-stig-password-complexity`
+    version `1.0.0`
+    author `security-team`
+    platform `linux`
+    criticality `medium`
+    control_mapping `DISA-STIG:RHEL-09-611015,NIST-800-53:IA-5`
+    title `RHEL 9 Password Complexity Requirements`
+    description `Ensures password complexity meets STIG requirements`
+    tags `stig,password,authentication,rhel9`
+    agent_type `node`
+META_END
+```
+
+### Criticality Levels and Default Weights
+
+| Criticality | Default Weight | Meaning |
+|-------------|---------------|---------|
+| `critical` | 1.0 | System compromise or data breach risk |
+| `high` | 0.8 | Significant security impact |
+| `medium` | 0.5 | Moderate security concern |
+| `low` | 0.3 | Minor security improvement |
+| `info` | 0.1 | Informational, best practice |
+
+### Custom Fields
+
+The parser accepts any field name in the META block. Scanner implementations may define additional fields for platform-specific requirements:
+
+```esp
+META
+    esp_scan_id `k8s-pod-security`
+    platform `kubernetes`
+    criticality `high`
+    control_mapping `CIS:5.2.1`
+
+    # Custom Kubernetes-specific fields
+    namespace `kube-system`
+    resource_type `Pod`
+    api_version `v1`
+META_END
 ```
 
 ---
