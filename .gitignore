@@ -3,6 +3,7 @@
 **/*.rs.bk
 *.pdb
 esp/
+*/target/
 # Cargo lock for libraries (keep for binaries)
 # Uncomment if this is a library-only workspace
 # Cargo.lock
