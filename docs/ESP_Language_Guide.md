@@ -145,7 +145,7 @@ DEF
     OBJECT_END
 
     CRI AND
-        CTN permission_check
+        CTN file_metadata
             TEST all all
             STATE_REF secure_permissions
             OBJECT_REF etc_passwd
@@ -213,27 +213,69 @@ STATE_END
 |----------|---------|---------|
 | `=` | Equals | `owner string = \`root\`` |
 | `!=` | Not equals | `status string != \`disabled\`` |
-| `contains` | String contains | `content string contains \`error\`` |
 | `>` | Greater than | `size int > 1000` |
 | `<` | Less than | `size int < 5000` |
 | `>=` | Greater or equal | `version string >= \`2.0\`` |
+| `<=` | Less or equal | `count int <= 10` |
+| `contains` | String contains | `content string contains \`error\`` |
+| `not_contains` | String does not contain | `content string not_contains \`DEBUG\`` |
+| `starts` | String starts with | `path string starts \`/etc\`` |
+| `ends` | String ends with | `filename string ends \`.conf\`` |
+| `not_starts` | Does not start with | `path string not_starts \`/tmp\`` |
+| `not_ends` | Does not end with | `filename string not_ends \`.bak\`` |
+| `ieq` | Case-insensitive equals | `status string ieq \`RUNNING\`` |
+| `ine` | Case-insensitive not equals | `mode string ine \`DEBUG\`` |
+| `pattern_match` | Regex pattern | `content string pattern_match \`^[0-9]+$\`` |
+| `matches` | Regex (alias) | `name string matches \`^app-.*\`` |
+| `subset_of` | Set subset | `tags string subset_of VAR allowed_tags` |
+| `superset_of` | Set superset | `roles string superset_of VAR required_roles` |
 
 ### Connecting Objects and States with CTN
 
+The CTN (Criterion) connects objects with states for validation:
+
 ```esp
-CTN identifier_name
-    TEST existence state_logic
+CTN criterion_type
+    TEST existence_check item_check [state_operator]
     STATE_REF state_identifier
     OBJECT_REF object_identifier
 CTN_END
 ```
 
+- `criterion_type` — The CTN type (e.g., `file_content`, `rpm_package`, `systemd_service`)
+- `existence_check` — How many objects must exist
+- `item_check` — How many objects must pass state validation
+- `state_operator` — How to combine multiple state fields (optional)
+
 **TEST options:**
 
-| Part | Options |
-|------|---------|
-| Existence | `all`, `any`, `none`, `at_least_one`, `only_one` |
-| State Logic | `all`, `any` |
+| Part | Options | Meaning |
+|------|---------|---------|
+| Existence | `all` | Every object must exist |
+| | `any` | At least one object exists |
+| | `none` | No objects should exist |
+| | `at_least_one` | One or more must exist |
+| | `only_one` | Exactly one must exist |
+| Item | `all` | All existing objects must pass |
+| | `any` | At least one must pass |
+| | `none` | None should pass (inverted check) |
+| | `at_least_one` | One or more must pass |
+| | `only_one` | Exactly one must pass |
+| | `none_satisfy` | No objects satisfy the state |
+| State Operator | `AND` | All state fields must match (default) |
+| | `OR` | Any state field can match |
+| | `ONE` | Exactly one state field must match |
+
+**Example with state operator:**
+
+```esp
+CTN file_content
+    TEST all all OR
+    STATE_REF has_setting_a
+    STATE_REF has_setting_b
+    OBJECT_REF config_file
+CTN_END
+```
 
 ---
 
@@ -293,25 +335,25 @@ DEF
 
     # Criteria - all checks must pass
     CRI AND
-        CTN pkg_check
+        CTN rpm_package
             TEST all all
             STATE_REF package_installed
             OBJECT_REF openssh_pkg
         CTN_END
 
-        CTN service_check
+        CTN systemd_service
             TEST all all
             STATE_REF service_active
             OBJECT_REF sshd_service
         CTN_END
 
-        CTN root_login_check
+        CTN file_content
             TEST all all
             STATE_REF no_root_login
             OBJECT_REF sshd_config
         CTN_END
 
-        CTN protocol_check
+        CTN file_content
             TEST all all
             STATE_REF protocol_two
             OBJECT_REF sshd_config
@@ -532,15 +574,37 @@ Common patterns:
 
 ### Record Checks
 
-Validate structured configuration data:
+Validate structured configuration data (JSON, INI, etc.):
 
 ```esp
-STATE ssh_secure_config
-    record config record_end
-        Protocol string = `2`
-        PermitRootLogin string = `no`
-        PasswordAuthentication string = `no`
-        PubkeyAuthentication string = `yes`
+STATE json_config_valid
+    record record_type
+        field settings.enabled boolean = true
+        field settings.timeout int > 30
+        field users[*].role string = `admin` at_least_one
+        field items[0].name string = `primary`
+    record_end
+STATE_END
+```
+
+**Field path syntax:**
+- `settings.enabled` — Nested field access
+- `users[*]` — Wildcard array (check all elements)
+- `items[0]` — Specific array index
+
+**Entity checks** (for array wildcards):
+- `all` — All array elements must match
+- `at_least_one` — At least one element must match
+- `none` — No elements should match
+- `only_one` — Exactly one element must match
+
+**Direct record operation:**
+
+```esp
+STATE simple_record
+    record string
+        contains `required_value`
+    record_end
 STATE_END
 ```
 
@@ -575,42 +639,223 @@ Control scanner behavior without changing what you check:
 | `include_hidden` | Include dotfiles |
 | `follow_symlinks` | Follow symbolic links |
 | `timeout N` | Command timeout in seconds |
+| `cache_results` | Cache collection results |
 
 ```esp
 OBJECT log_directory
     path `/var/log/app`
-    behavior recursive_scan max_depth 3
+    behavior recursive_scan max_depth 3 include_hidden false
 OBJECT_END
 ```
+
+### Parameters Block
+
+Pass parameters to collectors (e.g., command arguments, API options):
+
+```esp
+OBJECT process_list
+    module_name `Microsoft.PowerShell.Management`
+    verb `Get`
+    noun `Process`
+
+    parameters string
+        Name `sshd`
+        ErrorAction `SilentlyContinue`
+    parameters_end
+OBJECT_END
+```
+
+### Select Block
+
+Specify which fields to collect from an object:
+
+```esp
+OBJECT config_file
+    path `/etc/app`
+    filename `config.json`
+
+    select record
+        content text
+        owner uid
+        permissions mode
+        size bytes
+    select_end
+OBJECT_END
+```
+
+### Module Elements
+
+For PowerShell and other module-based collectors:
+
+| Field | Purpose |
+|-------|---------|
+| `module_name` | Full module name |
+| `verb` | PowerShell verb (Get, Set, etc.) |
+| `noun` | PowerShell noun |
+| `module_id` | Module identifier |
+| `module_version` | Required module version |
+
+```esp
+OBJECT security_policy
+    module_name `SecurityPolicy`
+    module_version `1.0.0`
+    verb `Get`
+    noun `SecuritySetting`
+
+    parameters string
+        Category `AccountPolicy`
+    parameters_end
+OBJECT_END
+```
+
+### Inline Definitions
+
+CTN blocks can contain inline (local) states and objects that are not referenceable elsewhere:
+
+```esp
+CTN file_content
+    TEST all all
+
+    # Inline state (local to this CTN)
+    STATE
+        content string contains `secure=true`
+        permissions string = `0600`
+    STATE_END
+
+    # Inline object (local to this CTN)
+    OBJECT
+        path `/tmp`
+        filename `temp.conf`
+    OBJECT_END
+CTN_END
+```
+
+Inline definitions are useful for one-off checks that don't need to be reused.
 
 ### RUN Operations
 
 Compute values at runtime:
 
+| Operation | Purpose | Example Use |
+|-----------|---------|-------------|
+| `CONCAT` | Join strings | Build file paths |
+| `SPLIT` | Split string into array | Parse delimited values |
+| `SUBSTRING` | Extract portion of string | Get prefix/suffix |
+| `REGEX_CAPTURE` | Extract via regex | Parse structured text |
+| `ARITHMETIC` | Math operations | Calculate thresholds |
+| `COUNT` | Count collection items | Validate array length |
+| `UNIQUE` | Remove duplicates | Deduplicate values |
+| `MERGE` | Combine collections | Join arrays |
+| `EXTRACT` | Get field from object | Access collected data |
+| `END` | Get string suffix | Extract file extension |
+
+**CONCAT example:**
+
 ```esp
-# Arithmetic
+RUN full_path CONCAT
+    VAR base_dir
+    literal `/`
+    VAR filename
+RUN_END
+```
+
+**ARITHMETIC example:**
+
+```esp
 RUN computed_threshold ARITHMETIC
     literal 1024
     + 512
     * 2
 RUN_END
+```
 
-# Extract field from object
-RUN extracted_version EXTRACT
-    OBJ package_obj version
+**SPLIT example:**
+
+```esp
+RUN path_parts SPLIT
+    VAR file_path
+    delimiter `/`
 RUN_END
+```
+
+**SUBSTRING example:**
+
+```esp
+RUN prefix SUBSTRING
+    VAR hostname
+    start 0
+    length 3
+RUN_END
+```
+
+**REGEX_CAPTURE example:**
+
+```esp
+RUN version_number REGEX_CAPTURE
+    VAR version_string
+    pattern `v([0-9]+\.[0-9]+)`
+RUN_END
+```
+
+**EXTRACT example:**
+
+```esp
+RUN package_version EXTRACT
+    OBJ openssl_pkg version
+RUN_END
+```
+
+### String Literals
+
+ESP uses backticks for string literals:
+
+```esp
+VAR path string `/etc/ssh/sshd_config`
+```
+
+**Escaping backticks:**
+
+Use double backticks for a literal backtick character:
+
+```esp
+VAR message string `This has a ``backtick`` inside`
+```
+
+**Empty string:**
+
+```esp
+VAR empty string ``
+```
+
+**Raw strings** (no escape processing):
+
+```esp
+VAR regex string r`^\d{3}-\d{4}$`
+```
+
+**Multiline strings:**
+
+```esp
+VAR script string ```
+#!/bin/bash
+echo "Hello"
+exit 0
+```
 ```
 
 ### Type System
 
 | Type | Purpose | Example |
 |------|---------|---------|
-| `string` | Text | `/etc/passwd` |
-| `int` | 64-bit integer | `1024` |
-| `float` | 64-bit float | `3.14159` |
+| `string` | Text values | `/etc/passwd` |
+| `int` | 64-bit signed integer | `1024` |
+| `float` | 64-bit floating point | `3.14159` |
 | `boolean` | True/false | `true` |
+| `binary` | Raw byte data | File contents |
+| `record` | Structured data | JSON/INI fields |
+| `record_type` | Record type specifier | Used in record checks |
 | `version` | Semantic version | `2.4.1` |
-| `evr_string` | Package version | `2:1.8.0-1.el9` |
+| `evr_string` | Package version (epoch:version-release) | `2:1.8.0-1.el9` |
 
 ---
 
@@ -636,16 +881,17 @@ DEF
     OBJECT_END
 
     STATE complexity_requirements
-        record config record_end
-            minlen string >= `15`
-            dcredit string = `-1`
-            ucredit string = `-1`
-            lcredit string = `-1`
-            ocredit string = `-1`
+        record record_type
+            field minlen int >= 15
+            field dcredit int = -1
+            field ucredit int = -1
+            field lcredit int = -1
+            field ocredit int = -1
+        record_end
     STATE_END
 
     CRI AND
-        CTN password_check
+        CTN file_content
             TEST all all
             STATE_REF complexity_requirements
             OBJECT_REF pwquality_conf
@@ -683,13 +929,13 @@ DEF
     OBJECT_END
 
     CRI AND
-        CTN package_check
+        CTN rpm_package
             TEST all all
             STATE_REF pkg_installed
             OBJECT_REF firewalld_pkg
         CTN_END
 
-        CTN service_check
+        CTN systemd_service
             TEST all all
             STATE_REF service_running
             OBJECT_REF firewalld_svc
@@ -741,13 +987,18 @@ Common causes:
 | Block | Syntax |
 |-------|--------|
 | Definition | `DEF ... DEF_END` |
+| Metadata | `META ... META_END` |
 | Variable | `VAR name type value` |
 | Object | `OBJECT name ... OBJECT_END` |
 | State | `STATE name ... STATE_END` |
 | Criteria | `CRI AND/OR ... CRI_END` |
-| Criterion | `CTN name ... CTN_END` |
-| Set | `SET name union/intersection ... SET_END` |
+| Criterion | `CTN type ... CTN_END` |
+| Set | `SET name union/intersection/complement ... SET_END` |
 | Filter | `FILTER include/exclude ... FILTER_END` |
+| Run | `RUN name operation ... RUN_END` |
+| Parameters | `parameters type ... parameters_end` |
+| Select | `select type ... select_end` |
+| Record | `record type ... record_end` |
 
 ### Common Patterns
 
@@ -807,8 +1058,9 @@ OBJECT_END
 | Category | Operators | Types |
 |----------|-----------|-------|
 | Comparison | `=` `!=` `>` `<` `>=` `<=` | All |
-| String | `contains` `starts` `ends` | string |
-| Pattern | `pattern_match` | string |
+| String | `contains` `starts` `ends` `not_contains` `not_starts` `not_ends` | string |
+| Case-insensitive | `ieq` `ine` | string |
+| Pattern | `pattern_match` `matches` | string |
 | Set | `subset_of` `superset_of` | Sets |
 
 ---

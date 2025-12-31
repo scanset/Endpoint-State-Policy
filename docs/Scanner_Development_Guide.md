@@ -292,8 +292,63 @@ fn add_behaviors(contract: &mut CtnContract) {
         description: "Set request timeout".to_string(),
         example: "behavior timeout 60".to_string(),
     });
+
+    // Multi-parameter behavior
+    contract.add_supported_behavior(SupportedBehavior {
+        name: "retry_policy".to_string(),
+        behavior_type: BehaviorType::Parameter,
+        parameters: vec![
+            BehaviorParameter {
+                name: "max_retries".to_string(),
+                data_type: DataType::Int,
+                required: true,
+                default_value: Some("3".to_string()),
+                description: "Maximum retry attempts".to_string(),
+            },
+            BehaviorParameter {
+                name: "backoff_ms".to_string(),
+                data_type: DataType::Int,
+                required: false,
+                default_value: Some("1000".to_string()),
+                description: "Backoff delay in milliseconds".to_string(),
+            },
+        ],
+        description: "Configure retry behavior".to_string(),
+        example: "behavior retry_policy max_retries 5 backoff_ms 2000".to_string(),
+    });
 }
 ```
+
+### Collection Strategy
+
+Specify how data should be collected:
+
+```rust
+fn set_collection_strategy(contract: &mut CtnContract) {
+    contract.collection_strategy = CollectionStrategy {
+        collector_type: "filesystem".to_string(),
+        collection_mode: CollectionMode::Content,  // Or Metadata, Command
+        required_capabilities: vec![
+            "file_read".to_string(),
+        ],
+        performance_hints: PerformanceHints {
+            expected_collection_time_ms: Some(50),
+            memory_usage_mb: Some(10),
+            network_intensive: false,
+            cpu_intensive: false,
+            requires_elevated_privileges: false,
+        },
+    };
+}
+```
+
+**Collection Modes:**
+
+| Mode | Use Case |
+|------|----------|
+| `Metadata` | File stats, permissions, ownership |
+| `Content` | File contents, configuration parsing |
+| `Command` | System commands (rpm, systemctl) |
 
 ---
 
@@ -308,7 +363,7 @@ use agent_core::strategies::{
     CtnDataCollector, CtnContract, CollectedData, CollectionError,
 };
 use agent_core::execution::BehaviorHints;
-use agent_core::types::execution_context::ExecutableObject;
+use agent_core::types::execution_context::{ExecutableObject, ExecutableObjectElement};
 use common::ast::ResolvedValue;
 use std::collections::HashMap;
 
@@ -328,12 +383,14 @@ impl YourCollector {
         object: &ExecutableObject,
         field_name: &str,
     ) -> Result<String, CollectionError> {
-        // Extract field from object elements
         for element in &object.elements {
             if let ExecutableObjectElement::Field { name, value, .. } = element {
                 if name == field_name {
-                    if let ResolvedValue::String(s) = value {
-                        return Ok(s.clone());
+                    match value {
+                        ResolvedValue::String(s) => return Ok(s.clone()),
+                        ResolvedValue::Integer(i) => return Ok(i.to_string()),
+                        ResolvedValue::Boolean(b) => return Ok(b.to_string()),
+                        _ => {}
                     }
                 }
             }
@@ -342,6 +399,16 @@ impl YourCollector {
             object_id: object.identifier.clone(),
             reason: format!("Missing field '{}'", field_name),
         })
+    }
+
+    fn extract_behavior_hints(&self, object: &ExecutableObject) -> BehaviorHints {
+        let mut hints = BehaviorHints::new();
+        for element in &object.elements {
+            if let ExecutableObjectElement::Behavior { values, .. } = element {
+                hints.add_from_values(values);
+            }
+        }
+        hints
     }
 }
 
@@ -352,31 +419,34 @@ impl CtnDataCollector for YourCollector {
         contract: &CtnContract,
         hints: &BehaviorHints,
     ) -> Result<CollectedData, CollectionError> {
-        // Validate hints
+        // Validate hints against contract
         contract.validate_behavior_hints(hints).map_err(|e| {
             CollectionError::CtnContractValidation { reason: e.to_string() }
         })?;
 
-        // Extract object fields
+        // Extract required object fields
         let resource_id = self.extract_field(object, "resource_id")?;
 
-        // Check behaviors
+        // Check behavior flags and parameters
         let include_metrics = hints.has_flag("include_metrics");
         let timeout = hints.get_parameter_as_int("timeout").unwrap_or(30);
 
-        // Collect data
+        // Create collected data
         let mut data = CollectedData::new(
             object.identifier.clone(),
             "your_ctn_type".to_string(),
             self.id.clone(),
         );
 
-        // Add fields
+        // Add collected fields
         data.add_field("status".to_string(), ResolvedValue::String("running".to_string()));
         data.add_field("cpu_usage".to_string(), ResolvedValue::Integer(45));
+        data.add_field("secure".to_string(), ResolvedValue::Boolean(true));
 
+        // Conditionally add based on behavior
         if include_metrics {
             data.add_field("memory_mb".to_string(), ResolvedValue::Integer(2048));
+            data.add_field("uptime_secs".to_string(), ResolvedValue::Integer(86400));
         }
 
         Ok(data)
@@ -392,6 +462,18 @@ impl CtnDataCollector for YourCollector {
 
     fn supports_batch_collection(&self) -> bool {
         false
+    }
+
+    fn validate_ctn_compatibility(
+        &self,
+        contract: &CtnContract,
+    ) -> Result<(), CollectionError> {
+        if !self.supported_ctn_types().contains(&contract.ctn_type) {
+            return Err(CollectionError::CtnContractValidation {
+                reason: format!("CTN type '{}' not supported", contract.ctn_type),
+            });
+        }
+        Ok(())
     }
 }
 ```
@@ -450,27 +532,32 @@ impl YourExecutor {
         operation: Operation,
     ) -> bool {
         match (expected, actual, operation) {
-            // String: use string::compare for all operations
+            // String: use string::compare for all string operations
             (ResolvedValue::String(exp), ResolvedValue::String(act), op) => {
                 string::compare(act, exp, op).unwrap_or(false)
             }
 
             // Integer comparisons
-            (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::Equals) => {
-                act == exp
-            }
-            (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::GreaterThan) => {
-                act > exp
-            }
-            (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::LessThan) => {
-                act < exp
-            }
+            (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::Equals) => act == exp,
+            (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::NotEqual) => act != exp,
+            (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::GreaterThan) => act > exp,
+            (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::LessThan) => act < exp,
+            (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::GreaterThanOrEqual) => act >= exp,
+            (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::LessThanOrEqual) => act <= exp,
 
-            // Boolean
-            (ResolvedValue::Boolean(exp), ResolvedValue::Boolean(act), Operation::Equals) => {
-                act == exp
-            }
+            // Float comparisons
+            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::Equals) => (act - exp).abs() < f64::EPSILON,
+            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::NotEqual) => (act - exp).abs() >= f64::EPSILON,
+            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::GreaterThan) => act > exp,
+            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::LessThan) => act < exp,
+            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::GreaterThanOrEqual) => act >= exp,
+            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::LessThanOrEqual) => act <= exp,
 
+            // Boolean comparisons
+            (ResolvedValue::Boolean(exp), ResolvedValue::Boolean(act), Operation::Equals) => act == exp,
+            (ResolvedValue::Boolean(exp), ResolvedValue::Boolean(act), Operation::NotEqual) => act != exp,
+
+            // Type mismatch or unsupported operation
             _ => false,
         }
     }
@@ -583,9 +670,46 @@ Always use `string::compare()` for string operations:
 ```rust
 use agent_core::execution::comparisons::string;
 
-// Handles: equals, not_equal, contains, not_contains,
-// starts_with, ends_with, pattern_match, case_insensitive_equals
 let passed = string::compare(actual, expected, operation).unwrap_or(false);
+```
+
+**Supported Operations:**
+
+| Operation | Description |
+|-----------|-------------|
+| `Operation::Equals` | Exact match |
+| `Operation::NotEqual` | Not equal |
+| `Operation::Contains` | Contains substring |
+| `Operation::NotContains` | Does not contain |
+| `Operation::StartsWith` | Starts with prefix |
+| `Operation::EndsWith` | Ends with suffix |
+| `Operation::NotStartsWith` | Does not start with |
+| `Operation::NotEndsWith` | Does not end with |
+| `Operation::CaseInsensitiveEquals` | Case-insensitive match (`ieq`) |
+| `Operation::CaseInsensitiveNotEquals` | Case-insensitive not equal (`ine`) |
+| `Operation::PatternMatch` | Regex pattern matching |
+| `Operation::Matches` | Regex (alias for PatternMatch) |
+
+### Version Comparisons
+
+For semantic version comparisons:
+
+```rust
+use agent_core::execution::comparisons::version;
+
+// Compares using semver rules: 2.10.0 > 2.9.0
+let passed = version::compare(actual, expected, operation).unwrap_or(false);
+```
+
+### EVR String Comparisons
+
+For RPM-style epoch:version-release comparisons:
+
+```rust
+use agent_core::execution::comparisons::evr;
+
+// Compares epoch:version-release format (e.g., "2:1.8.0-1.el9")
+let passed = evr::compare(actual, expected, operation).unwrap_or(false);
 ```
 
 ---
@@ -689,30 +813,185 @@ impl CtnDataCollector for YourCollector {
 
 ### Command Execution
 
-For command-based collectors:
+For command-based collectors, use `SystemCommandExecutor` with security controls:
 
 ```rust
 use agent_core::strategies::SystemCommandExecutor;
 use std::time::Duration;
 
+// Create executor with default timeout
 let mut executor = SystemCommandExecutor::with_timeout(Duration::from_secs(5));
-executor.allow_commands(&["rpm", "systemctl", "sysctl"]);
 
-let output = executor.execute("rpm", &["-q", "openssl"], None)?;
-println!("stdout: {}", output.stdout);
+// REQUIRED: Whitelist allowed commands
+executor.allow_commands(&["rpm", "systemctl", "sysctl", "getenforce"]);
+
+// Execute command
+let output = executor.execute(
+    "rpm",
+    &["-q", "--queryformat", "%{VERSION}", "openssl"],
+    Some(Duration::from_secs(10)),  // Per-command timeout override
+)?;
+
+if output.exit_code == 0 {
+    println!("Version: {}", output.stdout.trim());
+} else {
+    eprintln!("Error: {}", output.stderr);
+}
+```
+
+**Security Features:**
+
+| Feature | Description |
+|---------|-------------|
+| Whitelist-only | Only explicitly allowed commands can execute |
+| Timeout enforcement | Commands killed after timeout |
+| No shell expansion | Arguments passed directly, no shell injection |
+| Exit code checking | Non-zero exit codes properly handled |
+
+**Batch Command Optimization:**
+
+```rust
+impl CtnDataCollector for RpmCollector {
+    fn supports_batch_collection(&self) -> bool {
+        true
+    }
+
+    fn collect_batch(
+        &self,
+        objects: Vec<&ExecutableObject>,
+        _contract: &CtnContract,
+    ) -> Result<HashMap<String, CollectedData>, CollectionError> {
+        // Single rpm -qa call for ALL packages
+        let output = self.executor.execute("rpm", &["-qa", "--queryformat", "%{NAME}|%{VERSION}\\n"], None)?;
+
+        // Parse output once
+        let packages: HashMap<String, String> = output.stdout
+            .lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split('|').collect();
+                if parts.len() == 2 {
+                    Some((parts[0].to_string(), parts[1].to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Match against requested objects
+        let mut results = HashMap::new();
+        for object in objects {
+            let pkg_name = self.extract_field(object, "package_name")?;
+            let mut data = CollectedData::new(
+                object.identifier.clone(),
+                "rpm_package".to_string(),
+                self.collector_id().to_string(),
+            );
+
+            if let Some(version) = packages.get(&pkg_name) {
+                data.add_field("installed".to_string(), ResolvedValue::Boolean(true));
+                data.add_field("version".to_string(), ResolvedValue::String(version.clone()));
+            } else {
+                data.add_field("installed".to_string(), ResolvedValue::Boolean(false));
+            }
+
+            results.insert(object.identifier.clone(), data);
+        }
+
+        Ok(results)
+    }
+}
 ```
 
 ### Record Validation
 
-For structured JSON data:
+For structured JSON/record data validation:
 
 ```rust
-use agent_core::execution::record_validation::validate_record_checks;
+use agent_core::execution::record_validation::{validate_record_checks, RecordValidationResult};
+use common::ast::RecordData;
 
-let validation_results = validate_record_checks(
-    record_data,
-    &state.record_checks,
-)?;
+// In your executor, handle record checks
+for state in &criterion.states {
+    if !state.record_checks.is_empty() {
+        // Get RecordData from collected data
+        let record_data = match data.get_field("json_data") {
+            Some(ResolvedValue::RecordData(rd)) => rd,
+            _ => {
+                return Err(CtnExecutionError::DataValidationFailed {
+                    reason: "Expected RecordData for record checks".to_string(),
+                });
+            }
+        };
+
+        // Validate all record checks
+        let results = validate_record_checks(record_data, &state.record_checks)
+            .map_err(|e| CtnExecutionError::ExecutionFailed {
+                ctn_type: criterion.criterion_type.clone(),
+                reason: format!("Record validation failed: {}", e),
+            })?;
+
+        // Process results
+        for result in results {
+            field_results.push(FieldValidationResult {
+                field_name: result.field_path.clone(),
+                expected_value: result.expected.clone(),
+                actual_value: result.actual.clone(),
+                operation: result.operation,
+                passed: result.passed,
+                message: result.message.clone(),
+            });
+        }
+    }
+}
+```
+
+**Record check features:**
+
+- Nested field access: `settings.security.enabled`
+- Array wildcard: `users[*].role` (check all elements)
+- Array index: `items[0].name` (specific element)
+- Entity checks: `all`, `at_least_one`, `none`, `only_one`
+
+### Filter Support
+
+Filters are evaluated by the execution engine before collection. Your collector receives only filtered objects:
+
+```rust
+// The execution engine handles FILTER blocks automatically
+// Your collector doesn't need special filter logic
+
+// In ESP:
+// SET critical_files union
+//     OBJECT_REF file1
+//     OBJECT_REF file2
+//     FILTER include
+//         STATE_REF is_large
+//     FILTER_END
+// SET_END
+
+// Your collector receives only objects that passed the filter
+```
+
+### SET Operations
+
+SET operations are expanded by the resolution engine. Your collector sees individual objects:
+
+```rust
+// In ESP:
+// SET security_packages union
+//     OBJECT_REF pkg1
+//     OBJECT_REF pkg2
+// SET_END
+//
+// CTN rpm_package
+//     TEST all all
+//     STATE_REF installed
+//     OBJECT
+//         SET_REF security_packages
+//     OBJECT_END
+// CTN_END
+
+// Your collector receives pkg1 and pkg2 as separate collection requests
 ```
 
 ---
@@ -761,6 +1040,114 @@ fn test_full_scan() -> Result<(), Box<dyn std::error::Error>> {
 
     assert!(result.tree_passed);
     Ok(())
+}
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**"Field not found" errors**
+
+The executor can't find a field in collected data.
+
+```rust
+// Problem: ESP uses "permissions", collector provides "file_mode"
+
+// Solution: Add field mapping in contract
+contract.field_mappings.validation_mappings.state_to_data
+    .insert("permissions".to_string(), "file_mode".to_string());
+```
+
+**Pattern matching fails**
+
+Regex patterns don't match expected content.
+
+```rust
+// Problem: Manual string matching
+if actual.contains(expected) { ... }  // Wrong for patterns
+
+// Solution: Use string::compare for all string operations
+match string::compare(actual, expected, Operation::PatternMatch) {
+    Ok(result) => result,
+    Err(e) => {
+        eprintln!("Pattern error: {}", e);
+        false
+    }
+}
+```
+
+**Behavior hints ignored**
+
+BEHAVIOR directives don't affect collection.
+
+```rust
+// Problem: Not checking hints in collector
+
+// Solution: Validate and check hints
+contract.validate_behavior_hints(hints)?;
+
+if hints.has_flag("recursive_scan") {
+    // Enable recursive scanning
+}
+
+let max_depth = hints.get_parameter_as_int("max_depth").unwrap_or(3);
+```
+
+**Batch collection returns empty**
+
+Batch collection doesn't return results.
+
+```rust
+// Problem: supports_batch_collection returns false
+
+// Solution: Return true and implement collect_batch
+fn supports_batch_collection(&self) -> bool {
+    true  // Must return true!
+}
+
+fn collect_batch(...) -> Result<HashMap<String, CollectedData>, CollectionError> {
+    // Implementation required
+}
+```
+
+**Type mismatch in comparisons**
+
+Comparisons fail due to type differences.
+
+```rust
+// Problem: Comparing String to Integer
+(ResolvedValue::String(_), ResolvedValue::Integer(_), _) => false
+
+// Solution: Ensure collector returns correct types
+// If ESP expects `size int > 1000`, collector must return Integer
+data.add_field("size".to_string(), ResolvedValue::Integer(file_size));
+// NOT: ResolvedValue::String(file_size.to_string())
+```
+
+### Debug Logging
+
+Enable debug logging to trace execution:
+
+```bash
+ESP_LOGGING_MIN_LEVEL=debug cargo run -- policy.esp
+```
+
+Add logging in your collector:
+
+```rust
+use common::logging::{log_debug, log_info, log_error};
+
+fn collect_for_ctn_with_hints(...) -> Result<CollectedData, CollectionError> {
+    log_debug!("Collecting for object: {}", object.identifier);
+    log_info!("Behavior hints: {:?}", hints);
+
+    // ... collection logic
+
+    log_debug!("Collected {} fields", data.field_count());
+    Ok(data)
 }
 ```
 
@@ -840,8 +1227,32 @@ See `contract_kit/src/` for complete examples:
 
 | Type | Contract | Collector | Executor |
 |------|----------|-----------|----------|
-| File metadata | `contracts/file_metadata.rs` | `collectors/filesystem.rs` | `executors/file_metadata.rs` |
-| File content | `contracts/file_content.rs` | `collectors/filesystem.rs` | `executors/file_content.rs` |
-| JSON record | `contracts/json_record.rs` | `collectors/filesystem.rs` | `executors/json_record.rs` |
-| RPM package | `contracts/rpm_package.rs` | `collectors/command.rs` | `executors/rpm_package.rs` |
-| Systemd service | `contracts/systemd_service.rs` | `collectors/command.rs` | `executors/systemd_service.rs` |
+| `file_metadata` | `contracts/file_metadata.rs` | `collectors/filesystem.rs` | `executors/file_metadata.rs` |
+| `file_content` | `contracts/file_content.rs` | `collectors/filesystem.rs` | `executors/file_content.rs` |
+| `json_record` | `contracts/json_record.rs` | `collectors/filesystem.rs` | `executors/json_record.rs` |
+| `rpm_package` | `contracts/rpm_package.rs` | `collectors/command.rs` | `executors/rpm_package.rs` |
+| `systemd_service` | `contracts/systemd_service.rs` | `collectors/command.rs` | `executors/systemd_service.rs` |
+| `sysctl_parameter` | `contracts/sysctl_parameter.rs` | `collectors/command.rs` | `executors/sysctl_parameter.rs` |
+| `selinux_status` | `contracts/selinux_status.rs` | `collectors/command.rs` | `executors/selinux_status.rs` |
+| `computed_values` | `contracts/computed_values.rs` | `collectors/computed.rs` | `executors/computed_values.rs` |
+
+---
+
+## Summary
+
+To create a new CTN type:
+
+1. **Define Contract** — Object requirements, state requirements, field mappings, behaviors
+2. **Implement Collector** — Gather data, handle behaviors, return `CollectedData`
+3. **Implement Executor** — Three-phase validation (existence → state → item)
+4. **Register Strategy** — Pair collector + executor in registry
+5. **Test** — Unit tests, integration tests, example ESP file
+
+**Key Principles:**
+
+- Contracts define the interface between ESP and your code
+- Collectors gather data without validation logic
+- Executors validate data without collection logic
+- Field mappings decouple ESP names from internal names
+- Always use `string::compare()` for string operations
+- Command execution requires explicit whitelisting

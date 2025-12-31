@@ -45,13 +45,21 @@ All elements are case-sensitive.
 
 ### Reserved Keywords
 
-**Structure:** `DEF`, `VAR`, `STATE`, `OBJECT`, `CTN`, `CRI`, `SET`, `RUN`, `TEST`, `FILTER`, `META`, `parameters`, `select`, `record`
+**Structure:** `DEF`, `VAR`, `STATE`, `OBJECT`, `CTN`, `CRI`, `SET`, `RUN`, `TEST`, `FILTER`, `META`, `parameters`, `select`, `record`, `field`, `behavior`
 
 **End markers:** `DEF_END`, `STATE_END`, `OBJECT_END`, `CTN_END`, `CRI_END`, `SET_END`, `RUN_END`, `FILTER_END`, `META_END`, `parameters_end`, `select_end`, `record_end`
 
 **References:** `STATE_REF`, `OBJECT_REF`, `SET_REF`, `VAR`, `OBJ`
 
+**Module fields:** `module_name`, `verb`, `noun`, `module_id`, `module_version`
+
+**RUN parameters:** `literal`, `pattern`, `delimiter`, `character`, `start`, `length`
+
 **Operators:** `AND`, `OR`, `ONE`, `=`, `!=`, `>`, `<`, `>=`, `<=`, `ieq`, `ine`, `contains`, `starts`, `ends`, `not_contains`, `not_starts`, `not_ends`, `subset_of`, `superset_of`, `pattern_match`, `matches`, `+`, `-`, `*`, `/`, `%`
+
+**Filter actions:** `include`, `exclude`
+
+**Existence/Item checks:** `all`, `any`, `none`, `at_least_one`, `only_one`, `none_satisfy`
 
 ### Numeric Limits
 
@@ -123,19 +131,29 @@ ctn_state ::= "STATE" space identifier statement_end
               state_content
               "STATE_END" statement_end
 
-state_content ::= state_field+
+state_content ::= (state_field | record_check)+
 
 state_field ::= identifier space data_type space operation space value_spec statement_end
 
-(* Record fields for structured data *)
+(* Record checks for structured data validation *)
 record_check ::= "record" space data_type? statement_end
-                 record_field+
+                 record_content
                  "record_end" statement_end
+
+record_content ::= direct_operation | record_field+
+
+direct_operation ::= operation space value_spec statement_end
 
 record_field ::= "field" space field_path space data_type space operation
                  space value_spec (space entity_check)? statement_end
 
-field_path ::= identifier ("." identifier)*
+field_path ::= path_component ("." path_component)*
+
+path_component ::= identifier | array_access | wildcard
+
+array_access ::= identifier "[" (integer_value | "*") "]"
+
+wildcard ::= "*"
 ```
 
 ### Objects
@@ -154,22 +172,38 @@ ctn_object ::= "OBJECT" space identifier statement_end
 object_content ::= object_element+
 
 object_element ::= object_field
+                 | module_element
                  | parameter_block
                  | select_block
                  | behavior_spec
                  | filter_block
                  | set_reference
 
+(* Simple field *)
 object_field ::= identifier space field_value statement_end
 
+field_value ::= backtick_string | variable_reference | identifier
+
+(* Module specification for PowerShell, etc. *)
+module_element ::= module_field space backtick_string statement_end
+
+module_field ::= "module_name" | "verb" | "noun" | "module_id" | "module_version"
+
+(* Parameters block *)
 parameter_block ::= "parameters" space data_type statement_end
-                    (identifier space field_value statement_end)*
+                    parameter_field*
                     "parameters_end" statement_end
 
+parameter_field ::= identifier space field_value statement_end
+
+(* Select block *)
 select_block ::= "select" space data_type statement_end
-                 (identifier space field_value statement_end)*
+                 select_field*
                  "select_end" statement_end
 
+select_field ::= identifier space field_value statement_end
+
+(* Behavior specification *)
 behavior_spec ::= "behavior" space behavior_value+ statement_end
 
 behavior_value ::= identifier | integer_value | boolean_value
@@ -188,9 +222,11 @@ negate_flag ::= "true"
 
 criteria_content ::= (criteria | criterion)+
 
-criterion ::= "CTN" space identifier statement_end
+criterion ::= "CTN" space criterion_type statement_end
               ctn_content
               "CTN_END" statement_end
+
+criterion_type ::= identifier  (* CTN type: file_content, rpm_package, etc. *)
 
 (* CTN elements must appear in this order *)
 ctn_content ::= test_spec
@@ -253,19 +289,27 @@ run_block ::= "RUN" space identifier space operation_type statement_end
               "RUN_END" statement_end
 
 operation_type ::= "CONCAT" | "SPLIT" | "SUBSTRING" | "REGEX_CAPTURE"
-                 | "ARITHMETIC" | "COUNT" | "UNIQUE" | "MERGE" | "EXTRACT"
+                 | "ARITHMETIC" | "COUNT" | "UNIQUE" | "MERGE" | "EXTRACT" | "END"
 
 run_parameter ::= (literal_param | variable_param | object_param
-                 | pattern_param | delimiter_param | position_param
-                 | arithmetic_op) statement_end
+                 | pattern_param | delimiter_param | character_param
+                 | position_param | arithmetic_op) statement_end
 
 literal_param ::= "literal" space (backtick_string | integer_value)
+
 variable_param ::= "VAR" space identifier
+
 object_param ::= "OBJ" space identifier space identifier
+
 pattern_param ::= "pattern" space backtick_string
+
 delimiter_param ::= "delimiter" space backtick_string
+
+character_param ::= "character" space backtick_string
+
 position_param ::= ("start" | "length") space integer_value
-arithmetic_op ::= ("+" | "-" | "*" | "/" | "%") space integer_value
+
+arithmetic_op ::= ("+" | "-" | "*" | "/" | "%") space (integer_value | float_value)
 ```
 
 ### Values and Types
@@ -273,12 +317,13 @@ arithmetic_op ::= ("+" | "-" | "*" | "/" | "%") space integer_value
 ```ebnf
 value_spec ::= direct_value | variable_reference
 
-direct_value ::= backtick_string | integer_value | float_value | boolean_value
+direct_value ::= backtick_string | raw_string | multiline_string | raw_multiline
+               | integer_value | float_value | boolean_value
 
 variable_reference ::= "VAR" space identifier
 
 data_type ::= "string" | "int" | "float" | "boolean" | "binary"
-            | "record" | "version" | "evr_string"
+            | "record" | "record_type" | "version" | "evr_string"
 
 operation ::= comparison_op | string_op | set_op | pattern_op
 
@@ -305,15 +350,27 @@ float_value ::= "-"? [0-9]+ "." [0-9]+
 
 boolean_value ::= "true" | "false"
 
+(* String literals *)
 backtick_string ::= "`" ([^`] | "``")* "`"
 (* `` inside backticks = literal backtick *)
 (* `` alone = empty string *)
 
+(* Raw strings - no escape processing *)
+raw_string ::= "r`" ([^`] | "``")* "`"
+
+(* Multiline strings *)
+multiline_string ::= "```" ([^`] | "`" [^`] | "``" [^`])* "```"
+
+raw_multiline ::= "r```" ([^`] | "`" [^`] | "``" [^`])* "```"
+
+(* Whitespace *)
 space ::= " "+
 
 newline ::= "\n" | "\r\n"
 
 statement_end ::= space? comment? newline
+
+comment ::= "#" [^\n]*
 ```
 
 ---
@@ -322,19 +379,21 @@ statement_end ::= space? comment? newline
 
 ### Operations by Data Type
 
-| Operation | string | int | float | boolean | version |
-|-----------|--------|-----|-------|---------|---------|
-| `=` `!=` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `>` `<` `>=` `<=` | ✓¹ | ✓ | ✓ | ✗ | ✓² |
-| `ieq` `ine` | ✓ | ✗ | ✗ | ✗ | ✗ |
-| `contains` `starts` `ends` | ✓ | ✗ | ✗ | ✗ | ✗ |
-| `not_contains` `not_starts` `not_ends` | ✓ | ✗ | ✗ | ✗ | ✗ |
-| `pattern_match` `matches` | ✓ | ✗ | ✗ | ✗ | ✗ |
-| `subset_of` `superset_of` | ✓³ | ✓³ | ✓³ | ✓³ | ✗ |
+| Operation | string | int | float | boolean | binary | record | version | evr_string |
+|-----------|--------|-----|-------|---------|--------|--------|---------|------------|
+| `=` `!=` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `>` `<` `>=` `<=` | ✓¹ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓² | ✓² |
+| `ieq` `ine` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `contains` | ✓ | ✗ | ✗ | ✗ | ✓³ | ✗ | ✗ | ✗ |
+| `starts` `ends` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `not_contains` `not_starts` `not_ends` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `pattern_match` `matches` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `subset_of` `superset_of` | ✓⁴ | ✓⁴ | ✓⁴ | ✓⁴ | ✗ | ✗ | ✗ | ✗ |
 
 ¹ Lexicographic comparison
-² Semantic version comparison
-³ Requires collection from SET operation
+² Semantic version comparison (evr_string uses epoch:version-release)
+³ Binary contains performs byte sequence search
+⁴ Requires collection from SET operation
 
 ### RUN Operation Types
 
@@ -349,6 +408,7 @@ statement_end ::= space? comment? newline
 | `UNIQUE` | collection | same |
 | `MERGE` | collections | same |
 | `EXTRACT` | object | field type |
+| `END` | string | string |
 
 ---
 
@@ -372,33 +432,106 @@ statement_end ::= space? comment? newline
 ```esp
 META
     version `1.0.0`
+    esp_version `1.0`
+    author `security-team`
     control_framework `NIST-800-53`
     control `CM-6`
+    platform `linux`
+    severity `high`
 META_END
 
 DEF
+    # Variables
     VAR config_path string `/etc/ssh/sshd_config`
+    VAR threshold int 1024
 
+    # Runtime operation
+    RUN computed_limit ARITHMETIC
+        VAR threshold
+        * 2
+    RUN_END
+
+    # Global state (referenceable)
     STATE secure_settings
         content string not_contains `PermitRootLogin yes`
         content string contains `PasswordAuthentication no`
     STATE_END
 
+    STATE size_check
+        size int > VAR threshold
+    STATE_END
+
+    # Global object with select block
     OBJECT ssh_config
-        path VAR config_path
+        path `/etc/ssh`
+        filename `sshd_config`
+        behavior recurse false
 
         select record
             content text
             owner uid
+            permissions mode
         select_end
     OBJECT_END
 
+    # Object with parameters (PowerShell example)
+    OBJECT ps_process
+        module_name `Microsoft.PowerShell.Management`
+        verb `Get`
+        noun `Process`
+
+        parameters string
+            Name `sshd`
+            ErrorAction `SilentlyContinue`
+        parameters_end
+    OBJECT_END
+
+    # JSON object with record check
+    OBJECT config_json
+        path `/etc/app`
+        filename `config.json`
+    OBJECT_END
+
+    STATE json_valid
+        record record_type
+            field settings.security.enabled boolean = true
+            field users[*].role string = `admin` at_least_one
+        record_end
+    STATE_END
+
+    # Set operation
+    SET critical_files union
+        OBJECT_REF ssh_config
+        OBJECT_REF config_json
+        FILTER include
+            STATE_REF size_check
+        FILTER_END
+    SET_END
+
+    # Criteria
     CRI AND
         CTN file_content
             TEST all all AND
             STATE_REF secure_settings
             OBJECT_REF ssh_config
         CTN_END
+
+        CTN json_check
+            TEST all all
+            STATE_REF json_valid
+            OBJECT_REF config_json
+        CTN_END
+
+        # Nested criteria
+        CRI OR
+            CTN set_check
+                TEST any all
+                STATE_REF size_check
+                OBJECT
+                    SET_REF critical_files
+                OBJECT_END
+            CTN_END
+        CRI_END
     CRI_END
 DEF_END
 ```

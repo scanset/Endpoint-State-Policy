@@ -101,7 +101,7 @@ ESP enforces trust boundaries at every stage:
 | Capabilities | Privilege escalation |
 | Results | Information leakage |
 
-See [ESP Trust Model](docs/ESP_Trust_Model.md) for complete details.
+See [ESP Trust Model](docs/Trust_Model.md) for complete details.
 
 ---
 
