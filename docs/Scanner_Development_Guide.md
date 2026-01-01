@@ -56,6 +56,12 @@ ESP supports two result modes that affect how you design collectors:
 
 ---
 
+## What is a CTN?
+
+A **CTN (Criterion Type Node)** is the fundamental unit of compliance checking in ESP. Each CTN type represents a specific kind of resource you want to validate — files, packages, services, kernel parameters, etc. When you write `CTN file_metadata` in an ESP policy, you're invoking a registered CTN type that knows how to collect and validate file metadata. Creating a new scanner means defining a new CTN type with its contract (what fields it accepts), collector (how to gather data), and executor (how to validate against expected states).
+
+---
+
 ## Quick Start: Hello CTN
 
 Here's a minimal working example — a scanner that checks if a file exists:
@@ -1362,6 +1368,48 @@ fn test_full_scan() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Common Issues
 
+**ObjectNotFound vs AccessDenied confusion**
+
+This is the most common bug in new collectors. Using the wrong error type breaks TEST evaluation:
+
+```rust
+// WRONG: File exists but we can't read it
+if let Err(e) = fs::read(&path) {
+    return Err(CollectionError::ObjectNotFound { object_id });  // BUG!
+}
+
+// RIGHT: Distinguish between "doesn't exist" and "can't access"
+match fs::metadata(&path) {
+    Ok(_) => {
+        // File exists, try to read
+        match fs::read(&path) {
+            Ok(content) => { /* ... */ }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(CollectionError::AccessDenied {
+                    object_id,
+                    reason: "Permission denied".to_string(),
+                });
+            }
+            Err(e) => {
+                return Err(CollectionError::CollectionFailed {
+                    object_id,
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        return Err(CollectionError::ObjectNotFound { object_id });
+    }
+    Err(e) => {
+        return Err(CollectionError::CollectionFailed {
+            object_id,
+            reason: e.to_string(),
+        });
+    }
+}
+```
+
 **"Field not found" errors**
 
 The executor can't find a field in collected data.
@@ -1542,6 +1590,7 @@ fn collect_for_ctn_with_hints(...) -> Result<CollectedData, CollectionError> {
 - [ ] Validates behavior hints against contract
 - [ ] Handles all error cases with appropriate error types
 - [ ] Returns mapped field names matching contract
+- [ ] Returns all fields listed in contract's `required_data_fields`
 - [ ] Does not exceed contract's collection scope
 - [ ] Sets timeouts on I/O operations
 

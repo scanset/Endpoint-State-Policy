@@ -36,7 +36,7 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-        continue-on-error: true
+        continue-on-error: false
 
       - name: Build
         run: cargo build --workspace

@@ -308,6 +308,30 @@ cargo test --workspace
 
 ---
 
+### Makefile Commands
+
+The project includes a Makefile for common development tasks:
+
+| Command | Description |
+|---------|-------------|
+| `make build` | Build all crates |
+| `make dev` | Build in development mode |
+| `make release` | Build optimized release |
+| `make test` | Run all tests |
+| `make test-unit` | Run unit tests only |
+| `make lint` | Run strict clippy checks |
+| `make format` | Format code with rustfmt |
+| `make pre-commit` | Run pre-commit checks (format, lint, test) |
+| `make ci` | Run all CI checks |
+| `make clean` | Clean build artifacts |
+| `make docs` | Generate and open documentation |
+
+**Pre-commit hook setup:**
+```bash
+echo '#!/bin/sh
+make pre-commit' > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+
 ## Usage Paths
 
 ### 1. Use the Reference Scanner
