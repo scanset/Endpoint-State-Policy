@@ -1,4 +1,10 @@
+
 # Endpoint State Policy (ESP)
+
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
+[![GitHub release](https://img.shields.io/github/v/release/CurtisSlone/Endpoint-State-Policy)](https://github.com/CurtisSlone/Endpoint-State-Policy/releases)
+[![CI](https://github.com/CurtisSlone/Endpoint-State-Policy/actions/workflows/ci.yml/badge.svg)](https://github.com/CurtisSlone/Endpoint-State-Policy/actions)
 
 **Policy as Data: A declarative language for endpoint compliance validation**
 
