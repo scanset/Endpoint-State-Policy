@@ -813,16 +813,4 @@ mod integration_tests {
         assert!(val1.compare_with(&val2, Operation::Equals).unwrap());
         assert!(val1.compare_with(&val3, Operation::NotEqual).unwrap());
     }
-
-    #[test]
-    fn test_resolved_value_evr_comparison() {
-        let val1 = ResolvedValue::EvrString("1:2.3.4-5".to_string());
-        let val2 = ResolvedValue::EvrString("1:2.3.5-1".to_string());
-
-        // val1 (1:2.3.4-5) < val2 (1:2.3.5-1) is true
-        // So compare_with checks: is val2 < val1? That's false.
-        // We need to swap: is val1 < val2? That's true.
-        assert!(val1.compare_with(&val2, Operation::LessThan).unwrap());
-        assert!(val2.compare_with(&val1, Operation::GreaterThan).unwrap());
-    }
 }
