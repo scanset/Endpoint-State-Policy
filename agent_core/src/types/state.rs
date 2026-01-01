@@ -136,11 +136,7 @@ impl StateDeclaration {
     pub fn from_ast_node(node: &common::ast::nodes::StateDefinition) -> Self {
         Self {
             identifier: node.id.clone(),
-            fields: node
-                .fields
-                .iter()
-                .map( StateField::from_ast_field)
-                .collect(),
+            fields: node.fields.iter().map(StateField::from_ast_field).collect(),
             record_checks: node.record_checks.clone(),
             is_global: node.is_global,
         }

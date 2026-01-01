@@ -557,16 +557,14 @@ impl<'a> RegistryQuery<'a> {
             .iter()
             .filter_map(|(ctn_type, contract)| {
                 let hints = &contract.collection_strategy.performance_hints;
-
-                let time_ok = max_time_ms.is_none_or( |max| {
+                let time_ok = max_time_ms.is_none_or(|max| {
                     hints
                         .expected_collection_time_ms
-                        .is_none_or( |time| time <= max)
+                        .is_none_or(|time| time <= max)
                 });
 
-                let privileges_ok = requires_privileges.is_none_or( |required| {
-                    hints.requires_elevated_privileges == required
-                });
+                let privileges_ok = requires_privileges
+                    .is_none_or(|required| hints.requires_elevated_privileges == required);
 
                 if time_ok && privileges_ok {
                     Some(ctn_type.clone())
