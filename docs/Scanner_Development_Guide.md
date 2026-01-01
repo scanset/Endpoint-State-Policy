@@ -7,15 +7,16 @@ A complete guide for implementing custom compliance scanners using the ESP frame
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Getting Started](#getting-started)
-4. [Creating a CTN Contract](#creating-a-ctn-contract)
-5. [Implementing a Collector](#implementing-a-collector)
-6. [Implementing an Executor](#implementing-an-executor)
-7. [Registering Your Scanner](#registering-your-scanner)
-8. [Advanced Features](#advanced-features)
-9. [Testing](#testing)
-10. [Best Practices](#best-practices)
+2. [Quick Start: Hello CTN](#quick-start-hello-ctn)
+3. [Architecture](#architecture)
+4. [Getting Started](#getting-started)
+5. [Creating a CTN Contract](#creating-a-ctn-contract)
+6. [Implementing a Collector](#implementing-a-collector)
+7. [Implementing an Executor](#implementing-an-executor)
+8. [Registering Your Scanner](#registering-your-scanner)
+9. [Advanced Features](#advanced-features)
+10. [Testing](#testing)
+11. [Best Practices](#best-practices)
 
 ---
 
@@ -32,6 +33,238 @@ The ESP framework provides the infrastructure for building compliance scanners. 
 - **CTN Contracts** — Define what your scanner validates
 - **Collectors** — Gather data from the system
 - **Executors** — Validate collected data against ESP states
+
+### Threat Model for Scanner Authors
+
+ESP protects against several classes of threats. Understanding these helps you write secure scanners:
+
+| Threat | ESP Protection | Your Responsibility |
+|--------|----------------|---------------------|
+| Resource exhaustion | Timeout enforcement, batch limits | Set appropriate timeouts on all I/O |
+| Shell injection | No shell execution, whitelist-only commands | Use `SystemCommandExecutor`, never spawn shells |
+| Sensitive evidence leakage | Attestation mode strips CUI | Avoid over-collection, respect contract scope |
+| Non-deterministic results | Contract validation, typed values | Return consistent typed values |
+| Privilege escalation | Capability declarations | Declare `requires_elevated_privileges` accurately |
+
+### Result Modes and Scanner Design
+
+ESP supports two result modes that affect how you design collectors:
+
+- **Attestation mode** (default): Only policy outcomes are transmitted. Collected evidence stays local. Design collectors to gather what's needed for validation without storing sensitive data in results.
+
+- **Full results mode**: Expected/actual values included for audit. If your scanner collects sensitive fields (passwords, keys, PII), document this clearly and consider filtering before adding to `CollectedData`.
+
+---
+
+## Quick Start: Hello CTN
+
+Here's a minimal working example — a scanner that checks if a file exists:
+
+```rust
+// contracts/hello.rs
+use agent_core::strategies::{
+    CtnContract, ObjectFieldSpec, StateFieldSpec,
+    CollectionMode, CollectionStrategy, PerformanceHints,
+};
+use agent_core::types::common::{DataType, Operation};
+
+pub fn create_hello_contract() -> CtnContract {
+    let mut contract = CtnContract::new("hello_file".to_string());
+
+    // One required object field
+    contract.object_requirements.add_required_field(ObjectFieldSpec {
+        name: "path".to_string(),
+        data_type: DataType::String,
+        description: "File path to check".to_string(),
+        example_values: vec!["/etc/passwd".to_string()],
+        validation_notes: None,
+    });
+
+    // One state field
+    contract.state_requirements.add_optional_field(StateFieldSpec {
+        name: "exists".to_string(),
+        data_type: DataType::Boolean,
+        allowed_operations: vec![Operation::Equals],
+        description: "Whether file exists".to_string(),
+        example_values: vec!["true".to_string()],
+        validation_notes: None,
+    });
+
+    // Field mappings
+    contract.field_mappings.collection_mappings.required_data_fields =
+        vec!["exists".to_string()];
+    contract.field_mappings.validation_mappings.state_to_data
+        .insert("exists".to_string(), "exists".to_string());
+
+    // Collection strategy
+    contract.collection_strategy = CollectionStrategy {
+        collector_type: "filesystem".to_string(),
+        collection_mode: CollectionMode::Metadata,
+        required_capabilities: vec![],
+        performance_hints: PerformanceHints::default(),
+    };
+
+    contract
+}
+```
+
+```rust
+// collectors/hello.rs
+use agent_core::execution::BehaviorHints;
+use agent_core::strategies::{CollectedData, CollectionError, CtnContract, CtnDataCollector};
+use agent_core::types::common::ResolvedValue;
+use agent_core::types::execution_context::ExecutableObject;
+use std::path::Path;
+
+pub struct HelloCollector;
+
+impl CtnDataCollector for HelloCollector {
+    fn collect_for_ctn_with_hints(
+        &self,
+        object: &ExecutableObject,
+        _contract: &CtnContract,
+        _hints: &BehaviorHints,
+    ) -> Result<CollectedData, CollectionError> {
+        // Extract path from object
+        let path = object.get_field_value("path")
+            .and_then(|v| v.as_string())
+            .ok_or_else(|| CollectionError::InvalidObjectConfiguration {
+                object_id: object.identifier.clone(),
+                reason: "Missing 'path' field".to_string(),
+            })?;
+
+        let mut data = CollectedData::new(
+            object.identifier.clone(),
+            "hello_file".to_string(),
+            "hello_collector".to_string(),
+        );
+
+        // Check if file exists
+        let exists = Path::new(&path).exists();
+        data.add_field("exists".to_string(), ResolvedValue::Boolean(exists));
+
+        Ok(data)
+    }
+
+    fn supported_ctn_types(&self) -> Vec<String> {
+        vec!["hello_file".to_string()]
+    }
+
+    fn collector_id(&self) -> &str { "hello_collector" }
+
+    fn validate_ctn_compatibility(&self, contract: &CtnContract) -> Result<(), CollectionError> {
+        if contract.ctn_type != "hello_file" {
+            return Err(CollectionError::CtnContractValidation {
+                reason: format!("Expected 'hello_file', got '{}'", contract.ctn_type),
+            });
+        }
+        Ok(())
+    }
+
+    fn supports_batch_collection(&self) -> bool { false }
+}
+```
+
+```rust
+// executors/hello.rs
+use agent_core::execution::{evaluate_existence_check, evaluate_item_check, evaluate_state_operator};
+use agent_core::strategies::{
+    CollectedData, CtnContract, CtnExecutionError, CtnExecutionResult, CtnExecutor,
+    FieldValidationResult, StateValidationResult, TestPhase,
+};
+use agent_core::types::common::{Operation, ResolvedValue};
+use agent_core::types::execution_context::ExecutableCriterion;
+use common::results::Outcome;
+use std::collections::HashMap;
+
+pub struct HelloExecutor { contract: CtnContract }
+
+impl HelloExecutor {
+    pub fn new(contract: CtnContract) -> Self { Self { contract } }
+}
+
+impl CtnExecutor for HelloExecutor {
+    fn execute_with_contract(
+        &self,
+        criterion: &ExecutableCriterion,
+        collected_data: &HashMap<String, CollectedData>,
+        _contract: &CtnContract,
+    ) -> Result<CtnExecutionResult, CtnExecutionError> {
+        let test = &criterion.test;
+
+        // Existence check
+        let expected = criterion.expected_object_count();
+        let found = collected_data.len();
+        if !evaluate_existence_check(test.existence_check, found, expected) {
+            return Ok(CtnExecutionResult::fail(
+                "hello_file".to_string(),
+                format!("Expected {} objects, found {}", expected, found),
+            ));
+        }
+
+        // State validation
+        let mut state_results = Vec::new();
+        for (id, data) in collected_data {
+            let actual = data.get_field("exists").cloned()
+                .unwrap_or(ResolvedValue::Boolean(false));
+
+            let expected_val = criterion.states.first()
+                .and_then(|s| s.fields.first())
+                .map(|f| f.value.clone())
+                .unwrap_or(ResolvedValue::Boolean(true));
+
+            let passed = actual == expected_val;
+
+            state_results.push(StateValidationResult {
+                object_id: id.clone(),
+                state_results: vec![FieldValidationResult {
+                    field_name: "exists".to_string(),
+                    expected_value: expected_val,
+                    actual_value: actual,
+                    operation: Operation::Equals,
+                    passed,
+                    message: if passed { "Passed" } else { "Failed" }.to_string(),
+                }],
+                combined_result: passed,
+                state_operator: test.state_operator,
+                message: format!("{}: {}", id, if passed { "passed" } else { "failed" }),
+            });
+        }
+
+        let passing = state_results.iter().filter(|r| r.combined_result).count();
+        let item_passed = evaluate_item_check(test.item_check, passing, state_results.len());
+
+        Ok(CtnExecutionResult {
+            ctn_type: "hello_file".to_string(),
+            status: if item_passed { Outcome::Pass } else { Outcome::Fail },
+            test_phase: TestPhase::Complete,
+            state_results,
+            message: format!("{}/{} passed", passing, collected_data.len()),
+            ..Default::default()
+        })
+    }
+
+    fn get_ctn_contract(&self) -> CtnContract { self.contract.clone() }
+    fn ctn_type(&self) -> &str { "hello_file" }
+
+    fn validate_collected_data(
+        &self, _: &HashMap<String, CollectedData>, _: &CtnContract,
+    ) -> Result<(), CtnExecutionError> { Ok(()) }
+}
+```
+
+**Register and run:**
+
+```rust
+let mut registry = CtnStrategyRegistry::new();
+let contract = create_hello_contract();
+registry.register_ctn_strategy(
+    Box::new(HelloCollector),
+    Box::new(HelloExecutor::new(contract)),
+)?;
+
+let result = scan_file("policy.esp", Arc::new(registry))?;
+```
 
 ---
 
@@ -78,6 +311,35 @@ Every CTN type requires exactly three components:
 | **Contract** | `contracts/` | Interface specification |
 | **Collector** | `collectors/` | Data gathering |
 | **Executor** | `executors/` | Validation logic |
+
+### Collector vs Executor Responsibilities
+
+| Concern | Collector | Executor |
+|---------|-----------|----------|
+| Gather evidence from system | ✅ | ❌ |
+| Validate data against states | ❌ | ✅ |
+| Enforce I/O timeouts | ✅ | ✅ (for internal ops) |
+| Respect contract field limits | ✅ | ✅ |
+| Handle behavior hints | ✅ (modify collection) | ✅ (validate only) |
+| Return typed values | ✅ | N/A |
+
+**Capability Safety Rules:**
+
+- Collectors must not collect more than the contract requires
+- Executors must not perform additional collection
+- The contract defines what is allowed — enforce this boundary
+
+### Naming Conventions
+
+Follow these conventions for ecosystem consistency:
+
+| Element | Convention | Example |
+|---------|------------|---------|
+| CTN type names | `snake_case` | `rpm_package`, `file_metadata` |
+| Object field names | `snake_case`, policy-facing | `package_name`, `file_path` |
+| State field names | `snake_case`, policy-facing | `installed`, `permissions` |
+| Collected data fields | `snake_case`, internal | `pkg_version`, `file_mode` |
+| Object IDs | Stable unique identifiers | `sudoers_file`, `openssl_pkg` |
 
 ---
 
@@ -327,7 +589,7 @@ Specify how data should be collected:
 fn set_collection_strategy(contract: &mut CtnContract) {
     contract.collection_strategy = CollectionStrategy {
         collector_type: "filesystem".to_string(),
-        collection_mode: CollectionMode::Content,  // Or Metadata, Command
+        collection_mode: CollectionMode::Content,
         required_capabilities: vec![
             "file_read".to_string(),
         ],
@@ -349,6 +611,9 @@ fn set_collection_strategy(contract: &mut CtnContract) {
 | `Metadata` | File stats, permissions, ownership |
 | `Content` | File contents, configuration parsing |
 | `Command` | System commands (rpm, systemctl) |
+| `Security` | ACLs, SELinux contexts |
+| `Status` | Service state, process info |
+| `Custom(String)` | Custom collection mode |
 
 ---
 
@@ -399,16 +664,6 @@ impl YourCollector {
             object_id: object.identifier.clone(),
             reason: format!("Missing field '{}'", field_name),
         })
-    }
-
-    fn extract_behavior_hints(&self, object: &ExecutableObject) -> BehaviorHints {
-        let mut hints = BehaviorHints::new();
-        for element in &object.elements {
-            if let ExecutableObjectElement::Behavior { values, .. } = element {
-                hints.add_from_values(values);
-            }
-        }
-        hints
     }
 }
 
@@ -478,21 +733,38 @@ impl CtnDataCollector for YourCollector {
 }
 ```
 
-### Error Types
+### Error Types and Semantics
+
+Choose the correct error type — it affects TEST evaluation:
 
 ```rust
-// Object not found (triggers existence check)
+// Object cannot be located (e.g., file doesn't exist, package not installed)
+// This CONTRIBUTES TO existence check evaluation
 Err(CollectionError::ObjectNotFound { object_id })
 
-// Access denied
+// Object exists but cannot be accessed (e.g., permission denied)
+// This is DISTINCT from "not found" — avoids false "nonexistent" results
 Err(CollectionError::AccessDenied { object_id, reason })
 
-// General failure
+// Collection operation failed (e.g., timeout, parse error)
 Err(CollectionError::CollectionFailed { object_id, reason })
 
-// Invalid configuration
+// Object configuration is invalid (e.g., missing required field)
 Err(CollectionError::InvalidObjectConfiguration { object_id, reason })
+
+// CTN type not supported by this collector
+Err(CollectionError::UnsupportedCtnType { ctn_type, collector_id })
 ```
+
+**When to use which:**
+
+| Situation | Error Type | Effect on TEST |
+|-----------|------------|----------------|
+| File doesn't exist | `ObjectNotFound` | Counted as missing for existence check |
+| Permission denied reading file | `AccessDenied` | Error state, object exists but inaccessible |
+| Package not in RPM database | `ObjectNotFound` | Counted as missing |
+| JSON parse failure | `CollectionFailed` | Error state |
+| Missing `path` field in OBJECT | `InvalidObjectConfiguration` | Configuration error |
 
 ---
 
@@ -505,8 +777,7 @@ An executor validates collected data against STATE requirements.
 ```rust
 use agent_core::strategies::{
     CtnExecutor, CtnContract, CtnExecutionResult, CtnExecutionError,
-    CollectedData, ComplianceStatus, FieldValidationResult,
-    StateValidationResult, TestPhase,
+    CollectedData, FieldValidationResult, StateValidationResult, TestPhase,
 };
 use agent_core::execution::{
     evaluate_existence_check, evaluate_item_check, evaluate_state_operator,
@@ -514,6 +785,7 @@ use agent_core::execution::{
 };
 use agent_core::types::execution_context::ExecutableCriterion;
 use common::ast::{Operation, ResolvedValue};
+use common::results::Outcome;
 use std::collections::HashMap;
 
 pub struct YourExecutor {
@@ -638,9 +910,9 @@ impl CtnExecutor for YourExecutor {
 
         // Final result
         let status = if existence_passed && item_passed {
-            ComplianceStatus::Pass
+            Outcome::Pass
         } else {
-            ComplianceStatus::Fail
+            Outcome::Fail
         };
 
         Ok(CtnExecutionResult {
@@ -659,6 +931,14 @@ impl CtnExecutor for YourExecutor {
 
     fn ctn_type(&self) -> &str {
         "your_ctn_type"
+    }
+
+    fn validate_collected_data(
+        &self,
+        _collected_data: &HashMap<String, CollectedData>,
+        _contract: &CtnContract,
+    ) -> Result<(), CtnExecutionError> {
+        Ok(())
     }
 }
 ```
@@ -846,7 +1126,32 @@ if output.exit_code == 0 {
 | Whitelist-only | Only explicitly allowed commands can execute |
 | Timeout enforcement | Commands killed after timeout |
 | No shell expansion | Arguments passed directly, no shell injection |
+| Environment cleared | `env_clear()` with restricted `PATH` only |
 | Exit code checking | Non-zero exit codes properly handled |
+
+**Platform Command Configuration Example (RHEL 9):**
+
+```rust
+use agent_core::strategies::SystemCommandExecutor;
+use std::time::Duration;
+
+pub fn create_rhel9_command_executor() -> SystemCommandExecutor {
+    let mut executor = SystemCommandExecutor::with_timeout(Duration::from_secs(5));
+
+    executor.allow_commands(&[
+        "rpm",        // Package management
+        "systemctl",  // Service status
+        "getenforce", // SELinux status
+        "sysctl",     // Kernel parameters
+        "auditctl",   // Audit rules
+        "id",         // User info
+        "stat",       // File metadata
+        "getent",     // User/group database
+    ]);
+
+    executor
+}
+```
 
 **Batch Command Optimization:**
 
@@ -993,6 +1298,14 @@ SET operations are expanded by the resolution engine. Your collector sees indivi
 
 // Your collector receives pkg1 and pkg2 as separate collection requests
 ```
+
+**SET operation types:**
+
+| Operation | Operands | Description |
+|-----------|----------|-------------|
+| `union` | 1+ | Combine all objects from all operands |
+| `intersection` | 2+ | Objects present in all operands |
+| `complement` | exactly 2 | Objects in first but not second |
 
 ---
 
@@ -1161,61 +1474,86 @@ fn collect_for_ctn_with_hints(...) -> Result<CollectedData, CollectionError> {
 - Provide clear field descriptions and examples
 - Document edge cases in validation notes
 - Define behaviors for optional features
+- Use `snake_case` for all field names
 
 ❌ **Don't:**
 - Add unnecessary required fields
 - Use vague descriptions
-- Expose internal names in ESP fields
+- Expose internal names in ESP-facing fields
+- Create contracts with no state fields
 
 ### Collector Implementation
 
 ✅ **Do:**
 - Handle errors with specific types (`ObjectNotFound` vs `AccessDenied`)
-- Validate behavior hints against contract
-- Implement batch collection when beneficial
+- Validate behavior hints against contract before using them
+- Implement batch collection when beneficial (command-based, API-based)
+- Set timeouts on all I/O operations
+- Return typed values matching contract expectations
 
 ❌ **Don't:**
 - Silently ignore errors
-- Make API calls without timeout
+- Make API/command calls without timeout
 - Collect more than contract specifies
+- Perform validation logic (that's the executor's job)
 
 ### Executor Implementation
 
 ✅ **Do:**
 - Use `string::compare()` for ALL string operations
-- Use helper functions for TEST evaluation
+- Use framework helper functions (`evaluate_existence_check`, `evaluate_item_check`, `evaluate_state_operator`)
+- Apply field mappings from contract
 - Provide detailed failure messages
 
 ❌ **Don't:**
 - Implement custom string comparison logic
 - Skip field mapping lookups
 - Return generic error messages
+- Perform data collection (that's the collector's job)
+
+### Security
+
+✅ **Do:**
+- Use `SystemCommandExecutor` with explicit whitelists
+- Clear environment variables (done automatically)
+- Declare `requires_elevated_privileges` accurately
+- Document sensitive fields in contract
+
+❌ **Don't:**
+- Spawn shell processes
+- Use string interpolation in commands
+- Execute commands not in whitelist
+- Collect more data than needed for validation
 
 ---
 
 ## Checklist
 
 ### Contract
-- [ ] CTN type name is unique
-- [ ] Required/optional object fields defined
-- [ ] State fields have allowed operations
-- [ ] Field mappings configured
-- [ ] Behaviors documented
+- [ ] CTN type name is unique and uses `snake_case`
+- [ ] Required/optional object fields defined with clear descriptions
+- [ ] State fields have allowed operations listed
+- [ ] Field mappings configured (collection and validation)
+- [ ] Behaviors documented with examples
+- [ ] Collection strategy includes accurate performance hints
 
 ### Collector
-- [ ] Implements `CtnDataCollector`
-- [ ] Validates behavior hints
-- [ ] Handles all error cases
-- [ ] Returns mapped field names
+- [ ] Implements `CtnDataCollector` trait
+- [ ] Validates behavior hints against contract
+- [ ] Handles all error cases with appropriate error types
+- [ ] Returns mapped field names matching contract
+- [ ] Does not exceed contract's collection scope
+- [ ] Sets timeouts on I/O operations
 
 ### Executor
-- [ ] Implements `CtnExecutor`
-- [ ] Uses `string::compare()` for strings
-- [ ] Uses helper functions for TEST
-- [ ] Applies field mappings
+- [ ] Implements `CtnExecutor` trait
+- [ ] Uses `string::compare()` for string operations
+- [ ] Uses framework helpers for TEST evaluation
+- [ ] Applies field mappings from contract
+- [ ] Does not perform additional collection
 
 ### Integration
-- [ ] Registered in registry
+- [ ] Registered in registry with matching collector/executor
 - [ ] End-to-end test passing
 - [ ] Example ESP file provided
 
@@ -1227,14 +1565,16 @@ See `contract_kit/src/` for complete examples:
 
 | Type | Contract | Collector | Executor |
 |------|----------|-----------|----------|
-| `file_metadata` | `contracts/file_metadata.rs` | `collectors/filesystem.rs` | `executors/file_metadata.rs` |
-| `file_content` | `contracts/file_content.rs` | `collectors/filesystem.rs` | `executors/file_content.rs` |
-| `json_record` | `contracts/json_record.rs` | `collectors/filesystem.rs` | `executors/json_record.rs` |
-| `rpm_package` | `contracts/rpm_package.rs` | `collectors/command.rs` | `executors/rpm_package.rs` |
-| `systemd_service` | `contracts/systemd_service.rs` | `collectors/command.rs` | `executors/systemd_service.rs` |
-| `sysctl_parameter` | `contracts/sysctl_parameter.rs` | `collectors/command.rs` | `executors/sysctl_parameter.rs` |
-| `selinux_status` | `contracts/selinux_status.rs` | `collectors/command.rs` | `executors/selinux_status.rs` |
-| `computed_values` | `contracts/computed_values.rs` | `collectors/computed.rs` | `executors/computed_values.rs` |
+| `file_metadata` | `contracts/file_contracts.rs` | `collectors/filesystem.rs` | `executors/file_metadata.rs` |
+| `file_content` | `contracts/file_contracts.rs` | `collectors/filesystem.rs` | `executors/file_content.rs` |
+| `json_record` | `contracts/json_contracts.rs` | `collectors/filesystem.rs` | `executors/json_record.rs` |
+| `rpm_package` | `contracts/rpm_contracts.rs` | `collectors/command.rs` | `executors/rpm_package.rs` |
+| `systemd_service` | `contracts/systemd_contracts.rs` | `collectors/command.rs` | `executors/systemd_service.rs` |
+| `sysctl_parameter` | `contracts/sysctl_contracts.rs` | `collectors/command.rs` | `executors/sysctl_parameter.rs` |
+| `selinux_status` | `contracts/selinux_contracts.rs` | `collectors/command.rs` | `executors/selinux_status.rs` |
+| `tcp_listener` | `contracts/tcp_listener_contracts.rs` | `collectors/tcp_listener.rs` | `executors/tcp_listener.rs` |
+| `k8s_resource` | `contracts/k8s_resource_contracts.rs` | `collectors/k8s_resource.rs` | `executors/k8s_resource.rs` |
+| `computed_values` | `contracts/computed_values.rs` | `collectors/computed_values.rs` | `executors/computed_values.rs` |
 
 ---
 
@@ -1255,4 +1595,4 @@ To create a new CTN type:
 - Executors validate data without collection logic
 - Field mappings decouple ESP names from internal names
 - Always use `string::compare()` for string operations
-- Command execution requires explicit whitelisting
+- Command execution requires explicit whitelisting and timeouts, and must not use a shell
