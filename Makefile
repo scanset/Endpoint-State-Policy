@@ -259,7 +259,7 @@ clean-all: clean
 pre-commit:
 	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets -- -D warnings
-	cargo test --workspace --lib
+	cargo test --workspace
 	@echo "✓ Pre-commit checks passed"
 
 # Installation helpers

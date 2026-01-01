@@ -62,19 +62,18 @@ impl K8sResourceCollector {
 
     /// Find kubeconfig path from environment or default locations
     fn find_kubeconfig(&self) -> Option<String> {
-        // First check KUBECONFIG env var
+        // If running in-cluster (ServiceAccount mounted), let kubectl auto-detect
+        if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
+            return None;
+        }
+
+        // Only look for kubeconfig when running outside cluster
         if let Ok(kubeconfig) = std::env::var("KUBECONFIG") {
             if std::path::Path::new(&kubeconfig).exists() {
                 return Some(kubeconfig);
             }
         }
 
-        // Check /root/.kube/config (common in containers)
-        if std::path::Path::new("/root/.kube/config").exists() {
-            return Some("/root/.kube/config".to_string());
-        }
-
-        // Check $HOME/.kube/config
         if let Ok(home) = std::env::var("HOME") {
             let default_config = format!("{}/.kube/config", home);
             if std::path::Path::new(&default_config).exists() {
