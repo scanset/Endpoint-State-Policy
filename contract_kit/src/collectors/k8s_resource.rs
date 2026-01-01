@@ -60,14 +60,8 @@ impl K8sResourceCollector {
         Ok(None)
     }
 
-    /// Find kubeconfig path from environment or default locations
+    /// Find kubeconfig path for out-of-cluster usage
     fn find_kubeconfig(&self) -> Option<String> {
-        // If running in-cluster (ServiceAccount mounted), let kubectl auto-detect
-        if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
-            return None;
-        }
-
-        // Only look for kubeconfig when running outside cluster
         if let Ok(kubeconfig) = std::env::var("KUBECONFIG") {
             if std::path::Path::new(&kubeconfig).exists() {
                 return Some(kubeconfig);
@@ -104,8 +98,29 @@ impl K8sResourceCollector {
     ) -> Vec<String> {
         let mut args = vec![];
 
-        // Add kubeconfig if found
-        if let Some(kubeconfig) = self.find_kubeconfig() {
+        // Check for in-cluster config first
+        if let (Ok(host), Ok(port)) = (
+            std::env::var("KUBERNETES_SERVICE_HOST"),
+            std::env::var("KUBERNETES_SERVICE_PORT"),
+        ) {
+            // Running in-cluster - use explicit ServiceAccount auth
+            args.push("--server".to_string());
+            args.push(format!("https://{}:{}", host, port));
+
+            if let Ok(token) =
+                std::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/token")
+            {
+                args.push("--token".to_string());
+                args.push(token.trim().to_string());
+            }
+
+            let ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
+            if std::path::Path::new(ca_path).exists() {
+                args.push("--certificate-authority".to_string());
+                args.push(ca_path.to_string());
+            }
+        } else if let Some(kubeconfig) = self.find_kubeconfig() {
+            // Running outside cluster - use kubeconfig
             args.push("--kubeconfig".to_string());
             args.push(kubeconfig);
         }
