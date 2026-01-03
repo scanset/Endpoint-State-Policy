@@ -174,10 +174,47 @@ impl ExecutionEngine {
     }
 
     /// Build evidence from tree execution (CUI)
-    fn build_evidence(&self, _tree_result: &TreeResult) -> Option<Evidence> {
-        // Evidence collection is optional - can be expanded to capture
-        // raw collected data for audit purposes
-        None
+    ///
+    /// Extracts evidence from CtnExecutionResult.details for all CTN executions
+    /// in the tree and aggregates them into a single Evidence structure.
+    fn build_evidence(&self, tree_result: &TreeResult) -> Option<Evidence> {
+        let mut evidence = Evidence::new();
+        let mut has_evidence = false;
+
+        // Recursively collect evidence from all CTN results
+        self.collect_evidence_from_tree(tree_result, &mut evidence, &mut has_evidence);
+
+        if has_evidence {
+            Some(evidence)
+        } else {
+            None
+        }
+    }
+
+    /// Recursively collect evidence from tree results
+    fn collect_evidence_from_tree(
+        &self,
+        tree_result: &TreeResult,
+        evidence: &mut Evidence,
+        has_evidence: &mut bool,
+    ) {
+        // Collect from CTN results at this level
+        for ctn_result in &tree_result.ctn_results {
+            // Check if execution_result.details contains evidence
+            if let Some(ctn_evidence) = ctn_result.execution_result.details.get("evidence") {
+                // Only add if it's not null/empty
+                if !ctn_evidence.is_null() {
+                    let key = format!("{}_{}", ctn_result.criterion_type, ctn_result.ctn_node_id);
+                    evidence.add_data(key, ctn_evidence.clone());
+                    *has_evidence = true;
+                }
+            }
+        }
+
+        // Recurse into children
+        for child in &tree_result.child_results {
+            self.collect_evidence_from_tree(child, evidence, has_evidence);
+        }
     }
 
     /// Recursive tree traversal with logical operator application
