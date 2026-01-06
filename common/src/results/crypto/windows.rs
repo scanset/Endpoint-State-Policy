@@ -9,8 +9,8 @@ use super::HashingError;
 use windows::core::PCWSTR;
 use windows::Win32::Security::Cryptography::{
     BCryptCloseAlgorithmProvider, BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash,
-    BCryptGetProperty, BCryptHashData, BCryptOpenAlgorithmProvider, BCRYPT_ALG_HANDLE,
-    BCRYPT_HASH_HANDLE, BCRYPT_HASH_LENGTH, BCRYPT_SHA256_ALGORITHM,
+    BCryptHashData, BCryptOpenAlgorithmProvider, BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE,
+    BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS, BCRYPT_SHA256_ALGORITHM,
 };
 
 /// SHA-256 digest length in bytes
@@ -25,7 +25,7 @@ pub fn sha256(data: &[u8]) -> Result<Vec<u8>, HashingError> {
             &mut alg_handle,
             BCRYPT_SHA256_ALGORITHM,
             PCWSTR::null(),
-            0,
+            BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS(0),
         );
 
         if status.is_err() {
@@ -37,32 +37,6 @@ pub fn sha256(data: &[u8]) -> Result<Vec<u8>, HashingError> {
 
         // Ensure we close the algorithm provider when done
         let _alg_guard = AlgHandleGuard(alg_handle);
-
-        // Get hash length to verify
-        let mut hash_length: u32 = 0;
-        let mut result_length: u32 = 0;
-        let status = BCryptGetProperty(
-            alg_handle,
-            BCRYPT_HASH_LENGTH,
-            Some(&mut hash_length as *mut u32 as *mut u8),
-            std::mem::size_of::<u32>() as u32,
-            &mut result_length,
-            0,
-        );
-
-        if status.is_err() {
-            return Err(HashingError::CryptoError(format!(
-                "BCryptGetProperty failed: {:?}",
-                status
-            )));
-        }
-
-        if hash_length as usize != SHA256_DIGEST_LENGTH {
-            return Err(HashingError::CryptoError(format!(
-                "Unexpected hash length: {} (expected {})",
-                hash_length, SHA256_DIGEST_LENGTH
-            )));
-        }
 
         // Create hash object
         let mut hash_handle = BCRYPT_HASH_HANDLE::default();
@@ -127,6 +101,7 @@ impl Drop for HashHandleGuard {
 
 #[cfg(test)]
 mod tests {
+    use super::super::hex_encode;
     use super::*;
 
     #[test]
@@ -138,7 +113,7 @@ mod tests {
         assert_eq!(hash.len(), SHA256_DIGEST_LENGTH);
 
         let expected_hex = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-        let actual_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+        let actual_hex = hex_encode(&hash);
 
         assert_eq!(actual_hex, expected_hex);
     }
@@ -149,7 +124,7 @@ mod tests {
 
         // Known SHA-256 hash of empty string
         let expected_hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let actual_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+        let actual_hex = hex_encode(&hash);
 
         assert_eq!(actual_hex, expected_hex);
     }
