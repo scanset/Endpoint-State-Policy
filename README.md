@@ -1,4 +1,3 @@
-
 # Endpoint State Policy (ESP)
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
@@ -184,6 +183,28 @@ The scanner handles collection and validation. The policy expresses intent.
 
 ---
 
+## Platform Support
+
+ESP supports multiple platforms with FIPS 140-3 compliant cryptographic hashing:
+
+| Platform | Status | Cryptography Backend | Notes |
+|----------|--------|----------------------|-------|
+| **Linux** | ✅ Full Support | OpenSSL FIPS | Primary development platform |
+| **macOS** | ✅ Full Support | OpenSSL | Requires OpenSSL via Homebrew |
+| **Windows** | ✅ Full Support | Windows CNG (BCrypt) | No external dependencies |
+
+### Cross-Compilation
+
+The codebase supports cross-compilation from Linux to Windows without requiring OpenSSL for Windows builds. The Windows agent uses native Windows CNG APIs which are built into all modern Windows versions (10, 11, Server 2016+).
+
+### FIPS 140-3 Compliance
+
+Attestation integrity verification uses platform-native FIPS 140-3 certified cryptographic modules:
+- **Windows**: Windows CNG (BCrypt) - certified as part of Windows
+- **Linux**: OpenSSL FIPS provider - requires FIPS-validated OpenSSL installation
+
+---
+
 ## Architecture
 
 ### Workspace Structure
@@ -195,6 +216,7 @@ Endpoint-State-Policy/
 │   ├── config/             # Runtime configuration
 │   ├── logging/            # Structured logging system
 │   ├── results/            # Attestation and result types
+│   │   └── crypto/         # FIPS 140-3 compliant hashing
 │   └── utils/              # Span tracking, source maps
 │
 ├── compiler/               # ESP language compiler
@@ -237,7 +259,7 @@ Endpoint-State-Policy/
 
 | Component | Purpose |
 |-----------|---------|
-| **common** | Shared types: AST, logging, config, results |
+| **common** | Shared types: AST, logging, config, results, crypto |
 | **compiler** | Parse and validate ESP files (7-pass pipeline) |
 | **agent_core** | Resolution and execution framework |
 | **contract_kit** | Reference collectors, executors, contracts |
@@ -284,7 +306,9 @@ ESP answers: *"Is this endpoint in the required technical state?"*
 
 ### Prerequisites
 
-- **Rust 1.70+** ([rustup.rs](https://rustup.rs/))
+- **Rust 1.85+** ([rustup.rs](https://rustup.rs/))
+- **Linux/macOS**: OpenSSL development libraries (`libssl-dev` on Ubuntu, `openssl` on macOS)
+- **Windows**: No additional dependencies (uses native CNG)
 
 ### Build
 
@@ -294,6 +318,19 @@ cd Endpoint-State-Policy
 
 # Build all crates
 cargo build --workspace --release
+```
+
+### Cross-Compile for Windows (from Linux)
+
+```bash
+# Install MinGW toolchain
+sudo apt install mingw-w64
+
+# Add Windows target
+rustup target add x86_64-pc-windows-gnu
+
+# Build for Windows
+cargo build --workspace --release --target x86_64-pc-windows-gnu
 ```
 
 ### Run a Scan
@@ -337,6 +374,7 @@ The project includes a Makefile for common development tasks:
 echo '#!/bin/sh
 make pre-commit' > .git/hooks/pre-commit
 chmod +x .git/hooks/pre-commit
+```
 
 ## Usage Paths
 
@@ -428,6 +466,17 @@ let result = ExecutionEngine::new(context, registry).execute()?;
 | `SET` | Object collections | Union, intersection, complement |
 | `RUN` | Computations | String ops, arithmetic |
 
+### META Fields
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `esp_scan_id` | Yes | Unique policy identifier | `ssh-hardening-check` |
+| `platform` | Yes | Target platform | `linux`, `Windows`, `Kubernetes` |
+| `criticality` | Yes | Severity level | `critical`, `high`, `medium`, `low`, `info` |
+| `control_mapping` | Yes | Framework mappings | `CIS:5.1.1,NIST-800-53:AC-6` |
+| `esp_version` | No | Policy version | `1.0.0` |
+| `title` | No | Human-readable title | `SSH Hardening Check` |
+
 ### TEST Specification
 
 ```esp
@@ -440,15 +489,16 @@ TEST <existence_check> <item_check> [<state_operator>]
 
 ### CTN Types (Reference Implementations)
 
-| Type | Collector | Purpose |
-|------|-----------|---------|
-| `file_metadata` | FileSystem | Permissions, owner, size |
-| `file_content` | FileSystem | Content validation |
-| `json_record` | FileSystem | Structured JSON |
-| `rpm_package` | Command | Package checks |
-| `systemd_service` | Command | Service status |
-| `sysctl_parameter` | Command | Kernel params |
-| `selinux_status` | Command | SELinux mode |
+| Type | Platform | Collector | Purpose |
+|------|----------|-----------|---------|
+| `file_metadata` | Linux/Windows | FileSystem | Permissions, owner, size |
+| `file_content` | Linux/Windows | FileSystem | Content validation |
+| `json_record` | Linux/Windows | FileSystem | Structured JSON |
+| `rpm_package` | Linux | Command | Package checks |
+| `systemd_service` | Linux | Command | Service status |
+| `sysctl_parameter` | Linux | Command | Kernel params |
+| `selinux_status` | Linux | Command | SELinux mode |
+| `registry` | Windows | Command | Registry key/value checks |
 
 ---
 
@@ -461,6 +511,7 @@ ESP is designed with security as a core principle:
 - **Type-safe compilation** - Errors caught at compile time
 - **Compile-time limits** - Resource boundaries baked into binary
 - **Constrained execution** - Deterministic, repeatable behavior
+- **FIPS 140-3 cryptography** - Platform-native certified implementations
 
 ### Reporting Security Issues
 
@@ -473,15 +524,11 @@ For security vulnerabilities, contact **curtis@scanset.io** directly rather than
 ### Current (v0.1)
 - ✅ Core ESP language and compiler
 - ✅ Execution engine with full feature support
-- ✅ Reference scanner implementations
+- ✅ Reference scanner implementations (Linux)
 - ✅ SET, FILTER, RUN operations
 - ✅ Pattern matching and behaviors
-
-### Planned
-- [ ] Additional platform collectors
-- [ ] Enhanced error messages
-- [ ] Policy composition and inheritance
-- [ ] Remote endpoint scanning
+- ✅ FIPS 140-3 compliant cryptography
+- ✅ Cross-platform support (Linux, macOS, Windows)
 
 ---
 

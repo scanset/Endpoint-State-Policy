@@ -30,6 +30,39 @@ Complete results with evidence for local storage:
 
 **Warning**: Full results contain sensitive system configuration data. Store locally only—do not transmit over untrusted networks.
 
+## Cryptographic Hashing
+
+The `crypto` module provides **FIPS 140-3 compliant** hashing using platform-native cryptography:
+
+| Platform | Backend | Certification |
+|----------|---------|---------------|
+| **Windows** | Windows CNG (BCrypt) | FIPS 140-3 certified (built into Windows 10/11/Server 2016+) |
+| **Linux/Unix** | OpenSSL FIPS provider | FIPS 140-3 certified |
+
+### Usage
+
+```rust
+use common::results::crypto::{hash_content, sha256_hash, verify_hash};
+
+// Hash serializable content (canonical JSON + SHA-256)
+let hash = hash_content(&my_struct)?;
+
+// Hash raw bytes
+let digest = sha256_hash(b"hello world")?;
+
+// Verify content against hash
+let valid = verify_hash(&my_struct, &expected_hash)?;
+```
+
+### Cross-Platform Builds
+
+The crypto module automatically selects the appropriate backend at compile time:
+
+- **Windows target**: Uses `windows` crate with BCrypt APIs (no external dependencies)
+- **Non-Windows target**: Uses `openssl` crate
+
+This enables cross-compilation without bundling OpenSSL for Windows builds.
+
 ## Feature Flags
 
 Enable the output mode you need in your `Cargo.toml`:
@@ -44,6 +77,8 @@ common = { path = "../common", default-features = false, features = ["full-resul
 # Both modes
 common = { path = "../common", features = ["full-results"] }
 ```
+
+Note: The `crypto` module is always available regardless of feature flags.
 
 ## Common Types
 
@@ -149,7 +184,7 @@ let json = attestation.to_json()?;
 ### Verifying Attestations
 
 ```rust
-use common::results::attestation::{hash_content, verify_hash};
+use common::results::{hash_content, verify_hash};
 
 // Verify content integrity
 let is_valid = verify_hash(&attestation_content, &envelope.content_hash)?;
@@ -231,6 +266,11 @@ let meta_string = ControlMapping::to_meta_format(&mappings);
 results/
 ├── mod.rs              # Feature-gated re-exports
 ├── error.rs            # ResultError type
+├── crypto/             # FIPS 140-3 compliant hashing (always available)
+│   ├── mod.rs          # Platform-agnostic interface
+│   ├── canonical.rs    # Canonical JSON serialization
+│   ├── openssl.rs      # Linux/Unix backend (OpenSSL)
+│   └── windows.rs      # Windows backend (CNG/BCrypt)
 ├── common/             # Always available
 │   ├── outcome.rs      # Outcome enum
 │   ├── criticality.rs  # Criticality + Weight
@@ -240,8 +280,10 @@ results/
 ├── attestation/        # feature = "attestation"
 │   ├── types.rs        # ScanAttestation, CheckAttestation
 │   ├── builder.rs      # AttestationBuilder
-│   └── hashing.rs      # SHA-256 content hashing
+│   ├── hashing.rs      # Re-exports from crypto
+│   └── mod.rs
 └── full/               # feature = "full-results"
     ├── types.rs        # ScanResult, PolicyResult, Evidence
-    └── builder.rs      # FullResultBuilder
+    ├── builder.rs      # FullResultBuilder
+    └── mod.rs
 ```

@@ -2,7 +2,7 @@
 
 Shared types and utilities for the ESP (Endpoint State Policy) compiler and scanner ecosystem.
 
-This crate provides the foundational types used across the ESP toolchain: AST nodes, source location tracking, logging infrastructure, configuration management, result types, and metadata handling.
+This crate provides the foundational types used across the ESP toolchain: AST nodes, source location tracking, logging infrastructure, configuration management, result types, metadata handling, and FIPS 140-3 compliant cryptography.
 
 ## Overview
 
@@ -19,12 +19,12 @@ This crate provides the foundational types used across the ESP toolchain: AST no
 │  │ Criteria│  │ SourceMap│ │ Collector│ │          │           │
 │  └─────────┘  └─────────┘  └─────────┘  └──────────┘           │
 │                                                                  │
-│  ┌──────────┐  ┌──────────┐                                     │
-│  │ results  │  │ metadata │                                     │
-│  │          │  │          │                                     │
-│  │Attestation│ │MetaData  │                                     │
-│  │FullResult│  │Block     │                                     │
-│  └──────────┘  └──────────┘                                     │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                       │
+│  │ results  │  │ metadata │  │  crypto  │                       │
+│  │          │  │          │  │          │                       │
+│  │Attestation│ │MetaData  │  │ SHA-256  │                       │
+│  │FullResult│  │Block     │  │ FIPS 140 │                       │
+│  └──────────┘  └──────────┘  └──────────┘                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,6 +53,8 @@ use common::{
     logging::{self, codes},
     // Metadata
     metadata::MetaDataBlock,
+    // Cryptography
+    results::{hash_content, verify_hash},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,6 +68,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(meta) = &ast.metadata {
         println!("Policy: {}", meta.policy_id().unwrap_or("unknown"));
     }
+
+    // Hash content for integrity verification
+    let hash = hash_content(&ast)?;
+    println!("Content hash: {}", hash);
 
     // Log events
     log_info!("Processing policy", "file" => "policy.esp");
@@ -199,6 +205,38 @@ Key types: `ScanAttestation`, `CheckAttestation`, `Outcome`, `Criticality`
 
 ---
 
+### results::crypto
+
+**FIPS 140-3 compliant** cryptographic hashing with platform-native backends.
+
+```rust
+use common::results::{hash_content, sha256_hash, verify_hash};
+
+// Hash serializable content (canonical JSON + SHA-256)
+let hash = hash_content(&my_struct)?;
+
+// Hash raw bytes
+let digest = sha256_hash(b"hello world")?;
+
+// Verify content against expected hash
+let valid = verify_hash(&my_struct, &expected_hash)?;
+```
+
+| Platform | Backend | Certification |
+|----------|---------|---------------|
+| **Windows** | Windows CNG (BCrypt) | FIPS 140-3 certified (built into Windows 10/11/Server 2016+) |
+| **Linux/Unix** | OpenSSL FIPS provider | FIPS 140-3 certified |
+
+The crypto module is **always available** regardless of feature flags and automatically selects the appropriate backend at compile time. This enables cross-compilation to Windows without bundling OpenSSL.
+
+Key types: `HashingError`
+
+Key functions: `hash_content()`, `sha256_hash()`, `verify_hash()`, `hex_encode()`, `hex_decode()`
+
+📄 [Full documentation](results/README.md#cryptographic-hashing)
+
+---
+
 ### metadata
 
 Metadata block handling for ESP policies.
@@ -226,7 +264,7 @@ Required fields for scanner attestations:
 | Field | Description | Example |
 |-------|-------------|---------|
 | `esp_scan_id` | Unique policy identifier | `tcp-ports-check` |
-| `platform` | Target platform | `linux`, `Kubernetes` |
+| `platform` | Target platform | `linux`, `Kubernetes`, `Windows` |
 | `criticality` | Severity level | `critical`, `high`, `medium`, `low` |
 | `control_mapping` | Compliance framework mappings | `CIS:2.1,NIST-800-53:CM-7` |
 
@@ -244,6 +282,9 @@ use common::ast::nodes::EspFile;
 // Location types
 use common::{Position, Span, SourceMap, Spanned};
 use common::utils::{Position, Span, SourceMap, Spanned};
+
+// Crypto functions (from results module)
+use common::results::{hash_content, verify_hash, sha256_hash};
 ```
 
 ## Feature Flags
@@ -253,12 +294,24 @@ use common::utils::{Position, Span, SourceMap, Spanned};
 | `attestation` | ✅ | Network-safe result types |
 | `full-results` | ❌ | Complete results with evidence |
 
+Note: The `crypto` module is always available regardless of feature flags.
+
 Enable features in `Cargo.toml`:
 
 ```toml
 # Both modes
 common = { path = "../common", features = ["full-results"] }
 ```
+
+## Platform Support
+
+| Platform | Cryptography | Notes |
+|----------|--------------|-------|
+| Linux | OpenSSL | Requires OpenSSL development libraries |
+| macOS | OpenSSL | Requires OpenSSL (via Homebrew or similar) |
+| Windows | CNG (BCrypt) | Built-in, no external dependencies |
+
+Cross-compilation from Linux to Windows is supported without needing OpenSSL for Windows.
 
 ## Crate Structure
 
@@ -287,9 +340,15 @@ common/
 │   │   └── runtime.rs   # Runtime preferences
 │   ├── results/
 │   │   ├── mod.rs       # Feature-gated exports
-│   │   ├── common/      # Shared types
+│   │   ├── error.rs     # ResultError type
+│   │   ├── crypto/      # FIPS 140-3 compliant hashing
+│   │   │   ├── mod.rs       # Platform-agnostic interface
+│   │   │   ├── canonical.rs # Canonical JSON serialization
+│   │   │   ├── openssl.rs   # Linux/Unix backend
+│   │   │   └── windows.rs   # Windows CNG backend
+│   │   ├── common/      # Shared types (Outcome, Criticality, etc.)
 │   │   ├── attestation/ # Network-safe output
-│   │   └── full/        # Complete results
+│   │   └── full/        # Complete results with evidence
 │   └── metadata.rs      # MetaDataBlock
 └── README.md
 ```

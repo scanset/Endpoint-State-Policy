@@ -1,6 +1,7 @@
 //! Error types for results module
 
 use super::common::ControlMappingError;
+use super::crypto::HashingError;
 
 /// Errors that can occur during result generation
 #[derive(Debug)]
@@ -67,9 +68,8 @@ impl From<serde_json::Error> for ResultError {
     }
 }
 
-#[cfg(feature = "attestation")]
-impl From<super::attestation::HashingError> for ResultError {
-    fn from(err: super::attestation::HashingError) -> Self {
+impl From<HashingError> for ResultError {
+    fn from(err: HashingError) -> Self {
         ResultError::HashingError(err.to_string())
     }
 }

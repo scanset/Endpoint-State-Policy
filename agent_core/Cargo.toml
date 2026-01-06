@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["ESP Team"]
 description = "ESP scanner base"
 license.workspace = true
-keywords = ["esp", "Endpoint State Policy", "scanner"]
+keywords = ["esp", "Endpoint State Policy", "agent", "scanner"]
 
 [lib]
 name = "agent_core"

@@ -2,6 +2,13 @@
 //!
 //! Provides types and utilities for ESP compliance validation results.
 //!
+//! ## Cryptographic Hashing
+//!
+//! The `crypto` module provides FIPS 140-3 compliant hashing using platform-native
+//! cryptography:
+//! - **Windows**: Windows CNG (BCrypt) - built into all modern Windows versions
+//! - **Linux/Unix**: OpenSSL FIPS provider
+//!
 //! ## Features
 //!
 //! This module supports two output modes via feature flags:
@@ -32,7 +39,7 @@
 //! ```rust,ignore
 //! use common::results::full::{FullResultBuilder, ScanResult};
 //!
-//! let mut builder = FullResultBuilder::new("scan-1", "agent-1", "daemon");
+//! let mut builder = FullResultBuilder::new("scan-1", host, user);
 //! builder.add_policy(&metadata, outcome, criteria, findings, evidence)?;
 //! let result = builder.build();
 //! ```
@@ -46,6 +53,9 @@
 //! - `criticality` - Criticality level
 //! - `control_mapping` - Framework:ControlID pairs
 
+// Cryptographic utilities (always available, platform-specific implementation)
+pub mod crypto;
+
 // Common types (always available)
 pub mod common;
 pub mod error;
@@ -56,6 +66,12 @@ pub mod attestation;
 
 #[cfg(feature = "full-results")]
 pub mod full;
+
+// ============================================================================
+// Crypto re-exports (always available)
+// ============================================================================
+
+pub use crypto::{hash_content, hex_decode, hex_encode, sha256_hash, verify_hash, HashingError};
 
 // ============================================================================
 // Common re-exports (always available)
@@ -73,9 +89,9 @@ pub use error::{ResultError, ResultGenerationError};
 
 #[cfg(feature = "attestation")]
 pub use attestation::{
-    hash_content, validate_metadata, verify_hash, AttestationBuildError, AttestationBuilder,
-    AttestationEnvelope, AttestationSummary, CheckAttestation, CriticalityBreakdown,
-    CriticalityStats, HashingError, ScanAttestation, REQUIRED_META_FIELDS,
+    validate_metadata, AttestationBuildError, AttestationBuilder, AttestationEnvelope,
+    AttestationSummary, CheckAttestation, CriticalityBreakdown, CriticalityStats, ScanAttestation,
+    REQUIRED_META_FIELDS,
 };
 
 // ============================================================================

@@ -10,10 +10,15 @@ description = "Common types and utilities shared across ESP crates"
 
 [features]
 default = ["attestation"]
-attestation = ["dep:openssl"]
+attestation = []
 full-results = []
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-openssl = { version = "0.10", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Security_Cryptography"] }
+
+[target.'cfg(not(windows))'.dependencies]
+openssl = "0.10"

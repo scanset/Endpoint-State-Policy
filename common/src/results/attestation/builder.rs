@@ -6,7 +6,7 @@
 use super::super::common::{
     ControlMapping, ControlMappingError, CriteriaCounts, Criticality, Outcome, Weight,
 };
-use super::hashing;
+use super::super::crypto;
 use super::types::{
     AttestationEnvelope, AttestationSummary, CheckAttestation, CriticalityBreakdown,
     ScanAttestation,
@@ -60,8 +60,8 @@ impl AttestationBuilder {
             checks: &self.checks,
         };
 
-        // Hash the content
-        let content_hash = hashing::hash_content(&content)
+        // Hash the content using platform-native crypto
+        let content_hash = crypto::hash_content(&content)
             .map_err(|e| AttestationBuildError::HashingFailed(e.to_string()))?;
 
         // Generate attestation ID and timestamp
