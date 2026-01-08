@@ -2,11 +2,11 @@
 //!
 //! Contracts for file metadata and content validation.
 
-use agent_core::strategies::{
+use execution_engine::strategies::{
     BehaviorParameter, BehaviorType, CollectionMode, CollectionStrategy, CtnContract,
     ObjectFieldSpec, PerformanceHints, StateFieldSpec, SupportedBehavior,
 };
-use agent_core::types::common::{DataType, Operation};
+use execution_engine::types::common::{DataType, Operation};
 
 /// Create contract for file_metadata CTN type
 ///

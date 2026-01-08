@@ -2,11 +2,11 @@
 //!
 //! Validates structured JSON data with field path queries.
 
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CollectionMode, CollectionStrategy, CtnContract, ObjectFieldSpec, PerformanceHints,
     StateFieldSpec,
 };
-use agent_core::types::common::{DataType, Operation};
+use execution_engine::types::common::{DataType, Operation};
 
 pub fn create_json_record_contract() -> CtnContract {
     let mut contract = CtnContract::new("json_record".to_string());

@@ -3,10 +3,10 @@
 //! Collects information about TCP ports in LISTEN state.
 //! Reads /proc/net/tcp on Linux to determine if a port is listening.
 
-use agent_core::execution::BehaviorHints;
-use agent_core::strategies::{CollectedData, CollectionError, CtnContract, CtnDataCollector};
-use agent_core::types::common::ResolvedValue;
-use agent_core::types::execution_context::{ExecutableObject, ExecutableObjectElement};
+use execution_engine::execution::BehaviorHints;
+use execution_engine::strategies::{CollectedData, CollectionError, CtnContract, CtnDataCollector};
+use execution_engine::types::common::ResolvedValue;
+use execution_engine::types::execution_context::{ExecutableObject, ExecutableObjectElement};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -134,23 +134,26 @@ impl TcpListenerCollector {
         }
 
         // local_address is in format ADDR:PORT (hex)
-        let local_addr = parts[1];
+        // Safe access using .get()
+        let local_addr = parts.get(1)?;
         let addr_parts: Vec<&str> = local_addr.split(':').collect();
         if addr_parts.len() != 2 {
             return None;
         }
 
-        let local_ip_hex = addr_parts[0];
-        let local_port_hex = addr_parts[1];
+        // Safe access using .get()
+        let local_ip_hex = addr_parts.first()?;
+        let local_port_hex = addr_parts.get(1)?;
 
         // Check if port matches
-        if local_port_hex != port_hex {
+        if *local_port_hex != port_hex {
             return None;
         }
 
         // Check state - 0A is LISTEN
-        let state = parts[3];
-        if state != "0A" {
+        // Safe access using .get()
+        let state = parts.get(3)?;
+        if *state != "0A" {
             return None;
         }
 
@@ -193,7 +196,12 @@ impl TcpListenerCollector {
         }
 
         // /proc/net/tcp stores in little-endian, so reverse for display
-        format!("{}.{}.{}.{}", bytes[3], bytes[2], bytes[1], bytes[0])
+        // Safe access using .get() with defaults
+        let b3 = bytes.get(3).copied().unwrap_or(0);
+        let b2 = bytes.get(2).copied().unwrap_or(0);
+        let b1 = bytes.get(1).copied().unwrap_or(0);
+        let b0 = bytes.first().copied().unwrap_or(0);
+        format!("{}.{}.{}.{}", b3, b2, b1, b0)
     }
 }
 

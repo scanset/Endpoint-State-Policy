@@ -164,7 +164,10 @@ impl SemanticError {
     pub fn circular_dependency(dependency_type: &str, cycle_path: Vec<String>, span: Span) -> Self {
         // SECURITY: Limit cycle path length to prevent DoS via deep cycle reporting
         let limited_cycle_path = if cycle_path.len() > MAX_CYCLE_PATH_LENGTH {
-            let mut truncated = cycle_path[..MAX_CYCLE_PATH_LENGTH].to_vec();
+            let mut truncated = cycle_path
+                .get(..MAX_CYCLE_PATH_LENGTH)
+                .map(|s| s.to_vec())
+                .unwrap_or_else(|| cycle_path.to_vec());
             truncated.push("... [truncated for security]".to_string());
             truncated
         } else {
@@ -175,7 +178,7 @@ impl SemanticError {
             format!(
                 "{} -> {}",
                 limited_cycle_path.join(" -> "),
-                limited_cycle_path[0]
+                limited_cycle_path.first().cloned().unwrap_or_default()
             )
         } else {
             "unknown cycle".to_string()

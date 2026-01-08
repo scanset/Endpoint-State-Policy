@@ -12,6 +12,7 @@ pub fn sha256(data: &[u8]) -> Result<Vec<u8>, HashingError> {
         .map_err(|e| HashingError::CryptoError(format!("OpenSSL error: {}", e)))
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::super::hex_encode;

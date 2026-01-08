@@ -516,6 +516,12 @@ pub fn create_validation_summary(result: &ReferenceValidationResult) -> HashMap<
     summary
 }
 
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 #[cfg(test)]
 mod tests {
     use super::*;

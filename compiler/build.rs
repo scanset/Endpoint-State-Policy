@@ -1,4 +1,6 @@
 // build.rs - Complete TOML-driven constant generation + Windows import library
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::env;
 use std::fs;
 use std::path::Path;

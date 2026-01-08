@@ -81,10 +81,16 @@ pub fn validate_references_and_basic_dependencies(
 
     // Early exit if we have undefined references and user doesn't want to continue
     if !undefined_references.is_empty() && !preferences.continue_after_cycles {
-        return Err(ReferenceValidationError::undefined_reference(
-            &undefined_references[0].target,
-            &infer_symbol_type(&undefined_references[0].relationship_type),
-            undefined_references[0].source_span,
+        if let Some(first_ref) = undefined_references.first() {
+            return Err(ReferenceValidationError::undefined_reference(
+                &first_ref.target,
+                &infer_symbol_type(&first_ref.relationship_type),
+                first_ref.source_span,
+            ));
+        }
+        // Handle the case where undefined_references is somehow empty
+        return Err(ReferenceValidationError::internal_validation_error(
+            "Undefined references exist but list is empty",
         ));
     }
 
@@ -359,7 +365,10 @@ fn find_cycles_dfs(
             } else if rec_stack.contains(neighbor) {
                 // Found cycle - extract cycle portion
                 if let Some(cycle_start) = path.iter().position(|n| n == neighbor) {
-                    let cycle = path[cycle_start..].to_vec();
+                    let cycle = path
+                        .get(cycle_start..)
+                        .map(|s| s.to_vec())
+                        .unwrap_or_default();
 
                     // SECURITY: Only record cycles within length limit
                     if cycle.len() <= common::config::compile_time::references::MAX_CYCLE_LENGTH {
@@ -405,6 +414,12 @@ pub fn init_reference_validation() -> ValidationResult<()> {
     Ok(())
 }
 
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 #[cfg(test)]
 mod tests {
     use super::*;

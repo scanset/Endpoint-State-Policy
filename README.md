@@ -1,9 +1,8 @@
 # Endpoint State Policy (ESP)
 
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 [![GitHub tag](https://img.shields.io/github/v/tag/CurtisSlone/Endpoint-State-Policy?sort=semver)](https://github.com/CurtisSlone/Endpoint-State-Policy/tags)
-
 
 **Policy as Data: A declarative language for endpoint compliance validation**
 
@@ -22,7 +21,7 @@ Endpoint State Policy (ESP) is a platform-agnostic policy language that separate
               ┌──────────────┴──────────────┐
               ▼                              ▼
 ┌──────────────────────┐      ┌──────────────────────┐
-│      Compiler        │      │     agent_core       │
+│      Compiler        │      │   execution_engine   │
 │                      │      │                      │
 │ • Syntax validation  │      │ • Resolution engine  │
 │ • Type checking      │      │ • Execution engine   │
@@ -106,7 +105,7 @@ ESP enforces trust boundaries at every stage:
 | Capabilities | Privilege escalation |
 | Results | Information leakage |
 
-See [ESP Trust Model](docs/Trust_Model.md) for complete details.
+See [Trust Model](docs/Trust_Model.md) for complete details.
 
 ---
 
@@ -128,132 +127,47 @@ ESP focuses on **technical controls** — controls validated by inspecting endpo
 
 ---
 
-## Example Policy
+## Quick Start
 
-```esp
-# MITRE ATT&CK T1133 - External Remote Services
-# Ensure SSH is configured securely
+### Prerequisites
 
-META
-    esp_scan_id `mitre-t1133-ssh-hardening`
-    control_framework `MITRE-ATTACK`
-    control `T1133`
-    control_mapping `MITRE-ATTACK:T1133`
-    title `External Remote Services - SSH Hardening`
-    platform `linux`
-    criticality `high`
-META_END
+- **Rust 1.85+** ([rustup.rs](https://rustup.rs/))
+- **Linux/macOS**: OpenSSL development libraries (`libssl-dev` on Ubuntu, `openssl` on macOS)
+- **Windows**: No additional dependencies (uses native CNG)
 
-DEF
-    OBJECT sshd_config_file
-        path `/etc/ssh/sshd_config`
-    OBJECT_END
+### Dev Container (Recommended)
 
-    STATE no_root_login
-        content string contains `PermitRootLogin no`
-    STATE_END
+This repository includes a **VS Code Dev Container** for fast setup:
 
-    STATE no_password_auth
-        content string contains `PasswordAuthentication no`
-    STATE_END
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop) and [VS Code](https://code.visualstudio.com/)
+2. Install the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+3. Clone and open in VS Code:
+   ```bash
+   git clone https://github.com/CurtisSlone/Endpoint-State-Policy.git
+   code Endpoint-State-Policy
+   ```
+4. Click "Reopen in Container" when prompted
 
-    STATE no_empty_passwords
-        content string contains `PermitEmptyPasswords no`
-    STATE_END
+### Build and Run
 
-    CRI AND
-        CTN file_content
-            TEST all all AND
-            STATE_REF no_root_login
-            STATE_REF no_password_auth
-            STATE_REF no_empty_passwords
-            OBJECT_REF sshd_config_file
-        CTN_END
-    CRI_END
-DEF_END
+```bash
+# Build
+cargo build --workspace
+
+# Run scans on example policies
+make run ESP=esp/
 ```
 
-This policy:
-- Defines what file to examine (`OBJECT`)
-- Specifies expected content (`STATE`)
-- Combines checks with AND logic (`CRI`)
-- Maps to MITRE ATT&CK T1133 (`META`)
+### Example Policies
 
-The scanner handles collection and validation. The policy expresses intent.
-
----
-
-## Platform Support
-
-ESP supports multiple platforms with FIPS 140-3 compliant cryptographic hashing:
-
-| Platform | Status | Cryptography Backend | Notes |
-|----------|--------|----------------------|-------|
-| **Linux** | ✅ Full Support | OpenSSL FIPS | Primary development platform |
-| **macOS** | ✅ Full Support | OpenSSL | Requires OpenSSL via Homebrew |
-| **Windows** | ✅ Full Support | Windows CNG (BCrypt) | No external dependencies |
-
-### Cross-Compilation
-
-The codebase supports cross-compilation from Linux to Windows without requiring OpenSSL for Windows builds. The Windows agent uses native Windows CNG APIs which are built into all modern Windows versions (10, 11, Server 2016+).
-
-### FIPS 140-3 Compliance
-
-Attestation integrity verification uses platform-native FIPS 140-3 certified cryptographic modules:
-- **Windows**: Windows CNG (BCrypt) - certified as part of Windows
-- **Linux**: OpenSSL FIPS provider - requires FIPS-validated OpenSSL installation
+See the [`esp/`](esp/) directory for example policies demonstrating:
+- File metadata validation (`test_file_metadata.esp`)
+- File content validation (`test_file_content.esp`)
+- TCP listener validation (`test_tcp_listener.esp`)
 
 ---
 
 ## Architecture
-
-### Workspace Structure
-
-```
-Endpoint-State-Policy/
-├── common/                 # Shared types and utilities
-│   ├── ast/                # AST node definitions
-│   ├── config/             # Runtime configuration
-│   ├── logging/            # Structured logging system
-│   ├── results/            # Attestation and result types
-│   │   └── crypto/         # FIPS 140-3 compliant hashing
-│   └── utils/              # Span tracking, source maps
-│
-├── compiler/               # ESP language compiler
-│   ├── file_processor/     # File I/O and validation
-│   ├── lexical/            # Tokenization
-│   ├── syntax/             # AST construction
-│   ├── symbols/            # Symbol discovery
-│   ├── reference_resolution/
-│   ├── semantic_analysis/
-│   └── validation/         # Structural validation
-│
-├── agent_core/             # Execution framework
-│   ├── conversion/         # AST → execution types
-│   ├── resolution/         # Variable/SET resolution
-│   ├── execution/          # Validation engine
-│   ├── strategies/         # CTN contracts and traits
-│   └── types/              # Runtime type system
-│
-├── contract_kit/           # Reference implementations
-│   ├── collectors/         # Data collection
-│   ├── executors/          # Validation logic
-│   ├── contracts/          # CTN specifications
-│   └── agent_core_api/     # High-level scan API
-│
-├── agent/                  # Reference CLI scanner
-│
-├── config/                 # Build profiles (TOML)
-│   ├── development.toml
-│   ├── testing.toml
-│   └── production.toml
-│
-└── docs/                   # Documentation
-    ├── EBNF.md             # Language grammar
-    ├── ESP_Language_Guide.pdf
-    ├── ESP_Trust_Model.md  # Security trust boundaries
-    └── Scanner_Development_Guide.md
-```
 
 ### Component Responsibilities
 
@@ -261,7 +175,7 @@ Endpoint-State-Policy/
 |-----------|---------|
 | **common** | Shared types: AST, logging, config, results, crypto |
 | **compiler** | Parse and validate ESP files (7-pass pipeline) |
-| **agent_core** | Resolution and execution framework |
+| **execution_engine** | Resolution and execution framework |
 | **contract_kit** | Reference collectors, executors, contracts |
 | **agent** | Reference CLI application |
 
@@ -278,7 +192,7 @@ policy.esp
                              │ Validated AST
                              ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                      agent_core                             │
+│                    execution_engine                         │
 │  Conversion → Resolution → Execution → Results              │
 └────────────────────────────┬────────────────────────────────┘
                              │
@@ -302,241 +216,67 @@ ESP answers: *"Is this endpoint in the required technical state?"*
 
 ---
 
-## Quick Start
+## CTN Types
 
-### Prerequisites
+| Type | Platform | Purpose |
+|------|----------|---------|
+| `file_metadata` | Linux/Windows | Permissions, owner, size, existence |
+| `file_content` | Linux/Windows | Content validation (contains, pattern_match) |
+| `json_record` | Linux/Windows | Structured JSON field validation |
+| `tcp_listener` | Linux | TCP port listening state |
+| `k8s_resource` | Kubernetes | Kubernetes API resource validation |
 
-- **Rust 1.85+** ([rustup.rs](https://rustup.rs/))
-- **Linux/macOS**: OpenSSL development libraries (`libssl-dev` on Ubuntu, `openssl` on macOS)
-- **Windows**: No additional dependencies (uses native CNG)
-
-### Build
-
-```bash
-git clone https://github.com/CurtisSlone/Endpoint-State-Policy.git
-cd Endpoint-State-Policy
-
-# Build all crates
-cargo build --workspace --release
-```
-
-### Cross-Compile for Windows (from Linux)
-
-```bash
-# Install MinGW toolchain
-sudo apt install mingw-w64
-
-# Add Windows target
-rustup target add x86_64-pc-windows-gnu
-
-# Build for Windows
-cargo build --workspace --release --target x86_64-pc-windows-gnu
-```
-
-### Run a Scan
-
-```bash
-# Using the reference agent
-cargo run -p agent -- policy.esp
-
-# Or after installing
-./target/release/esp_agent policy.esp
-```
-
-### Run Tests
-
-```bash
-cargo test --workspace
-```
+See [contract_kit/docs/](contract_kit/docs/) for complete CTN type reference.
 
 ---
 
-### Makefile Commands
-
-The project includes a Makefile for common development tasks:
+## Makefile Commands
 
 | Command | Description |
 |---------|-------------|
-| `make build` | Build all crates |
-| `make dev` | Build in development mode |
-| `make release` | Build optimized release |
+| `make build` | Build the agent |
+| `make run ESP=<path>` | Run agent on file or directory |
+| `make run-compiler ESP=<path>` | Run compiler only |
 | `make test` | Run all tests |
-| `make test-unit` | Run unit tests only |
 | `make lint` | Run strict clippy checks |
-| `make format` | Format code with rustfmt |
-| `make pre-commit` | Run pre-commit checks (format, lint, test) |
-| `make ci` | Run all CI checks |
-| `make clean` | Clean build artifacts |
-| `make docs` | Generate and open documentation |
-
-**Pre-commit hook setup:**
-```bash
-echo '#!/bin/sh
-make pre-commit' > .git/hooks/pre-commit
-chmod +x .git/hooks/pre-commit
-```
-
-## Usage Paths
-
-### 1. Use the Reference Scanner
-
-The `agent` crate provides a working CLI scanner:
-
-```bash
-esp_agent policy.esp              # Single file
-esp_agent /path/to/policies/      # Directory batch
-```
-
-### 2. Build Your Own Scanner
-
-Use `contract_kit` to create a custom scanner:
-
-```rust
-use contract_kit::agent_core_api::{scan_file, CtnStrategyRegistry};
-use std::sync::Arc;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Build registry with your strategies
-    let registry = Arc::new(create_my_registry()?);
-
-    // Scan
-    let result = scan_file("policy.esp", registry)?;
-
-    if result.tree_passed {
-        println!("Compliant");
-    }
-
-    Ok(())
-}
-```
-
-See [contract_kit](contract_kit/README.md) and [Scanner Development Guide](docs/Scanner_Development_Guide.md).
-
-### 3. Embed the Engine
-
-Use `compiler` and `agent_core` directly for full control:
-
-```rust
-use compiler::pipeline;
-use agent_core::conversion::convert_ast_to_scanner_types;
-use agent_core::resolution::ResolutionEngine;
-use agent_core::execution::ExecutionEngine;
-
-// Compile
-let ast = pipeline::process_file("policy.esp")?.ast;
-
-// Convert and resolve
-let types = convert_ast_to_scanner_types(&ast)?;
-let context = resolve(types)?;
-
-// Execute
-let result = ExecutionEngine::new(context, registry).execute()?;
-```
 
 ---
 
 ## Documentation
 
-| Document | Audience | Description |
-|----------|----------|-------------|
-| [ESP Language Guide](docs/ESP_Language_Guide.md) | Policy Authors | Complete language reference |
-| [ESP Trust Model](docs/Trust_Model.md) | Security Teams | Trust boundaries and guarantees |
-| [EBNF Grammar](docs/EBNF.md) | Language Implementers | Formal grammar specification |
-| [Scanner Development Guide](docs/Scanner_Development_Guide.md) | Scanner Developers | Building custom CTN types |
-| [common README](common/README.md) | Developers | Shared types and utilities |
-| [compiler README](compiler/README.md) | Developers | Compiler architecture |
-| [agent_core README](agent_core/README.md) | Developers | Execution framework |
-| [contract_kit README](contract_kit/README.md) | Developers | Reference implementations |
-| [agent README](agent/README.md) | Developers | CLI reference |
+| Document | Description |
+|----------|-------------|
+| [ESP Language Guide](docs/ESP_Language_Guide.md) | Complete language reference |
+| [EBNF Grammar](docs/EBNF.md) | Formal grammar specification |
+| [Trust Model](docs/Trust_Model.md) | Security boundaries and guarantees |
+| [Scanner Development Guide](docs/Scanner_Development_Guide.md) | Building custom CTN types |
+| [CTN Type Reference](contract_kit/docs/) | Collector/executor documentation |
 
 ---
 
-## Key Concepts
+## Platform Support
 
-### Policy Elements
-
-| Element | Purpose | Example |
-|---------|---------|---------|
-| `META` | Policy metadata (ID, framework, criticality) | `esp_scan_id`, `control_mapping` |
-| `VAR` | Reusable values | `VAR config_path string \`/etc/app.conf\`` |
-| `OBJECT` | What to collect | File paths, package names, service names |
-| `STATE` | What to validate | Expected permissions, content, status |
-| `CRI` | Logical grouping | `CRI AND` / `CRI OR` |
-| `CTN` | Individual check | Combines OBJECT + STATE with TEST spec |
-| `SET` | Object collections | Union, intersection, complement |
-| `RUN` | Computations | String ops, arithmetic |
-
-### META Fields
-
-| Field | Required | Description | Example |
-|-------|----------|-------------|---------|
-| `esp_scan_id` | Yes | Unique policy identifier | `ssh-hardening-check` |
-| `platform` | Yes | Target platform | `linux`, `Windows`, `Kubernetes` |
-| `criticality` | Yes | Severity level | `critical`, `high`, `medium`, `low`, `info` |
-| `control_mapping` | Yes | Framework mappings | `CIS:5.1.1,NIST-800-53:AC-6` |
-| `esp_version` | No | Policy version | `1.0.0` |
-| `title` | No | Human-readable title | `SSH Hardening Check` |
-
-### TEST Specification
-
-```esp
-TEST <existence_check> <item_check> [<state_operator>]
-```
-
-- **Existence**: `all`, `any`, `none`, `at_least_one`, `only_one`
-- **Item**: `all`, `any`, `none`, `at_least_one`, `only_one`
-- **State Operator**: `AND`, `OR`, `ONE`
-
-### CTN Types (Reference Implementations)
-
-| Type | Platform | Collector | Purpose |
-|------|----------|-----------|---------|
-| `file_metadata` | Linux/Windows | FileSystem | Permissions, owner, size |
-| `file_content` | Linux/Windows | FileSystem | Content validation |
-| `json_record` | Linux/Windows | FileSystem | Structured JSON |
-| `rpm_package` | Linux | Command | Package checks |
-| `systemd_service` | Linux | Command | Service status |
-| `sysctl_parameter` | Linux | Command | Kernel params |
-| `selinux_status` | Linux | Command | SELinux mode |
-| `registry` | Windows | Command | Registry key/value checks |
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Linux | ✅ Full | Primary development platform |
+| macOS | ✅ Full | Requires OpenSSL via Homebrew |
+| Windows | ✅ Full | Uses native CNG APIs |
 
 ---
 
 ## Security
 
-ESP is designed with security as a core principle:
+- **No code execution** — Policies are data, not scripts
+- **Whitelisted commands** — Only approved commands can execute
+- **FIPS 140-3 cryptography** — Platform-native certified implementations
 
-- **No code execution** - Policies are data, not scripts
-- **Whitelisted commands** - Only approved commands can execute
-- **Type-safe compilation** - Errors caught at compile time
-- **Compile-time limits** - Resource boundaries baked into binary
-- **Constrained execution** - Deterministic, repeatable behavior
-- **FIPS 140-3 cryptography** - Platform-native certified implementations
-
-### Reporting Security Issues
-
-For security vulnerabilities, contact **curtis@scanset.io** directly rather than opening a public issue.
+For security vulnerabilities, contact **curtis@scanset.io**.
 
 ---
 
-## Roadmap
+## License
 
-### Current (v0.1)
-- ✅ Core ESP language and compiler
-- ✅ Execution engine with full feature support
-- ✅ Reference scanner implementations (Linux)
-- ✅ SET, FILTER, RUN operations
-- ✅ Pattern matching and behaviors
-- ✅ FIPS 140-3 compliant cryptography
-- ✅ Cross-platform support (Linux, macOS, Windows)
-
----
-
-## Resources
-
-- **Repository**: https://github.com/CurtisSlone/Endpoint-State-Policy
-- **Issues**: https://github.com/CurtisSlone/Endpoint-State-Policy/issues
-- **Contact**: curtis@scanset.io
+Apache 2.0
 
 ---
 

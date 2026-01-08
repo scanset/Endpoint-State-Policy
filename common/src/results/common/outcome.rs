@@ -74,6 +74,7 @@ impl std::fmt::Display for Outcome {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

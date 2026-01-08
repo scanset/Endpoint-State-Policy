@@ -2,6 +2,23 @@
 //!
 //! Provides types and utilities for ESP compliance validation results.
 //!
+//! ## Architecture
+//!
+//! ```text
+//! ExecutionEnvelope (wraps all result types)
+//! ├── result_id, agent, host, timestamps, content_hash, signature
+//! │
+//! ├── For Attestations (CUI-free, network-safe)
+//! │   ├── ExecutionSummary
+//! │   ├── CheckAttestation[] (PolicyIdentity + Outcome)
+//! │   └── EvidenceSummary (hash only, no actual values)
+//! │
+//! └── For Full Results (CUI included, local storage)
+//!     ├── ExecutionSummary
+//!     ├── PolicyResult[] (includes findings)
+//!     └── Evidence (complete collected data)
+//! ```
+//!
 //! ## Cryptographic Hashing
 //!
 //! The `crypto` module provides FIPS 140-3 compliant hashing using platform-native
@@ -21,28 +38,12 @@
 //! - Content hashing for integrity
 //! - Signature-ready structure
 //!
-//! ```rust,ignore
-//! use common::results::{AttestationBuilder, ScanAttestation};
-//!
-//! let mut builder = AttestationBuilder::new("agent-1", "controller");
-//! builder.add_check(&metadata, outcome, criteria)?;
-//! let attestation = builder.build()?;
-//! ```
-//!
 //! ### `full-results`
 //!
 //! Complete results with evidence (contains CUI):
 //! - Expected/actual values
 //! - Raw collected data
 //! - For local storage only
-//!
-//! ```rust,ignore
-//! use common::results::full::{FullResultBuilder, ScanResult};
-//!
-//! let mut builder = FullResultBuilder::new("scan-1", host, user);
-//! builder.add_policy(&metadata, outcome, criteria, findings, evidence)?;
-//! let result = builder.build();
-//! ```
 //!
 //! ## Required META Fields
 //!
@@ -53,14 +54,29 @@
 //! - `criticality` - Criticality level
 //! - `control_mapping` - Framework:ControlID pairs
 
-// Cryptographic utilities (always available, platform-specific implementation)
+// ============================================================================
+// Core modules (always available)
+// ============================================================================
+
+// Cryptographic utilities (platform-specific implementation)
 pub mod crypto;
 
-// Common types (always available)
+// Common types (Outcome, Criticality, etc.)
 pub mod common;
+
+// Error types
 pub mod error;
 
+// New consolidated types
+pub mod envelope;
+pub mod evidence;
+pub mod identity;
+pub mod summary;
+
+// ============================================================================
 // Feature-gated modules
+// ============================================================================
+
 #[cfg(feature = "attestation")]
 pub mod attestation;
 
@@ -81,7 +97,17 @@ pub use common::{
     ControlMapping, ControlMappingError, CriteriaCounts, Criticality, Outcome, PolicyOutcome,
     ResultCounts, Weight,
 };
+
 pub use error::{ResultError, ResultGenerationError};
+
+// ============================================================================
+// New consolidated type re-exports (always available)
+// ============================================================================
+
+pub use envelope::{AgentInfo, ExecutionEnvelope, HostInfo, SignatureInfo};
+pub use evidence::{CollectionRecord, CollectionSummary, Evidence, EvidenceSummary};
+pub use identity::PolicyIdentity;
+pub use summary::{CriticalityBreakdown, CriticalityStats, ExecutionSummary};
 
 // ============================================================================
 // Attestation re-exports (default feature)
@@ -90,8 +116,8 @@ pub use error::{ResultError, ResultGenerationError};
 #[cfg(feature = "attestation")]
 pub use attestation::{
     validate_metadata, AttestationBuildError, AttestationBuilder, AttestationEnvelope,
-    AttestationSummary, CheckAttestation, CriticalityBreakdown, CriticalityStats, ScanAttestation,
-    REQUIRED_META_FIELDS,
+    AttestationSummary, CheckAttestation, CriticalityBreakdown as AttestationCriticalityBreakdown,
+    CriticalityStats as AttestationCriticalityStats, ScanAttestation, REQUIRED_META_FIELDS,
 };
 
 // ============================================================================
@@ -100,9 +126,9 @@ pub use attestation::{
 
 #[cfg(feature = "full-results")]
 pub use full::{
-    ComplianceFinding, EspMetadata, Evidence, FindingSeverity, FullResultBuildError,
-    FullResultBuilder, HostContext, PolicyResult, ScanMetadata, ScanResult, ScanSummary,
-    TimestampInfo, UserContext,
+    ComplianceFinding, EspMetadata, Evidence as FullEvidence, FindingSeverity,
+    FullResultBuildError, FullResultBuilder, HostContext, PolicyResult, ScanMetadata, ScanResult,
+    ScanSummary, TimestampInfo, UserContext,
 };
 
 // ============================================================================

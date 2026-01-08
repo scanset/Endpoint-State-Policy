@@ -201,104 +201,123 @@ impl MemoryLogger {
     }
 
     pub fn get_events(&self) -> Vec<LogEvent> {
-        self.events.lock().unwrap().clone()
+        self.events
+            .lock()
+            .map(|events| events.clone())
+            .unwrap_or_default()
     }
 
     pub fn clear(&self) {
-        self.events.lock().unwrap().clear();
+        if let Ok(mut events) = self.events.lock() {
+            events.clear();
+        }
     }
 
     pub fn event_count(&self) -> usize {
-        self.events.lock().unwrap().len()
+        self.events.lock().map(|e| e.len()).unwrap_or(0)
     }
 
     pub fn get_errors(&self) -> Vec<LogEvent> {
         self.events
             .lock()
-            .unwrap()
-            .iter()
-            .filter(|e| e.is_error())
-            .cloned()
-            .collect()
+            .map(|events| events.iter().filter(|e| e.is_error()).cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn get_warnings(&self) -> Vec<LogEvent> {
         self.events
             .lock()
-            .unwrap()
-            .iter()
-            .filter(|e| e.is_warning())
-            .cloned()
-            .collect()
+            .map(|events| events.iter().filter(|e| e.is_warning()).cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn get_events_with_code(&self, code: Code) -> Vec<LogEvent> {
         self.events
             .lock()
-            .unwrap()
-            .iter()
-            .filter(|e| e.code.as_str() == code.as_str())
-            .cloned()
-            .collect()
+            .map(|events| {
+                events
+                    .iter()
+                    .filter(|e| e.code.as_str() == code.as_str())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn has_error_with_code(&self, code: Code) -> bool {
         self.events
             .lock()
-            .unwrap()
-            .iter()
-            .any(|e| e.is_error() && e.code.as_str() == code.as_str())
+            .map(|events| {
+                events
+                    .iter()
+                    .any(|e| e.is_error() && e.code.as_str() == code.as_str())
+            })
+            .unwrap_or(false)
     }
 
     pub fn has_success_with_code(&self, code: Code) -> bool {
         self.events
             .lock()
-            .unwrap()
-            .iter()
-            .any(|e| e.is_info() && e.code.as_str() == code.as_str())
+            .map(|events| {
+                events
+                    .iter()
+                    .any(|e| e.is_info() && e.code.as_str() == code.as_str())
+            })
+            .unwrap_or(false)
     }
 
     pub fn get_critical_errors(&self) -> Vec<LogEvent> {
         self.events
             .lock()
-            .unwrap()
-            .iter()
-            .filter(|e| e.is_error() && e.requires_halt())
-            .cloned()
-            .collect()
+            .map(|events| {
+                events
+                    .iter()
+                    .filter(|e| e.is_error() && e.requires_halt())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn get_events_by_severity(&self, min_severity: &str) -> Vec<LogEvent> {
         self.events
             .lock()
-            .unwrap()
-            .iter()
-            .filter(|e| {
-                let event_severity = e.severity();
-                matches!(
-                    (min_severity, event_severity),
-                    ("Critical", "Critical")
-                        | ("High", "Critical" | "High")
-                        | ("Medium", "Critical" | "High" | "Medium")
-                        | ("Low", _)
-                )
+            .map(|events| {
+                events
+                    .iter()
+                    .filter(|e| {
+                        let event_severity = e.severity();
+                        matches!(
+                            (min_severity, event_severity),
+                            ("Critical", "Critical")
+                                | ("High", "Critical" | "High")
+                                | ("Medium", "Critical" | "High" | "Medium")
+                                | ("Low", _)
+                        )
+                    })
+                    .cloned()
+                    .collect()
             })
-            .cloned()
-            .collect()
+            .unwrap_or_default()
     }
 
     pub fn get_events_by_category(&self, category: &str) -> Vec<LogEvent> {
         self.events
             .lock()
-            .unwrap()
-            .iter()
-            .filter(|e| e.category() == category)
-            .cloned()
-            .collect()
+            .map(|events| {
+                events
+                    .iter()
+                    .filter(|e| e.category() == category)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn get_summary(&self) -> EventSummary {
-        let events = self.events.lock().unwrap();
+        let Ok(events) = self.events.lock() else {
+            return EventSummary::default();
+        };
         let total_count = events.len();
         let error_count = events.iter().filter(|e| e.is_error()).count();
         let warning_count = events.iter().filter(|e| e.is_warning()).count();
@@ -328,7 +347,9 @@ impl Default for MemoryLogger {
 
 impl Logger for MemoryLogger {
     fn log(&self, event: &LogEvent) {
-        let mut events = self.events.lock().unwrap();
+        let Ok(mut events) = self.events.lock() else {
+            return;
+        };
 
         // Respect buffer size limits from config
         let max_events = config::get_error_buffer_size();
@@ -344,7 +365,7 @@ impl Logger for MemoryLogger {
 }
 
 /// Summary of events in memory logger
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EventSummary {
     pub total_count: usize,
     pub error_count: usize,
@@ -533,6 +554,7 @@ pub fn create_test_logger() -> Arc<MemoryLogger> {
     Arc::new(MemoryLogger::new())
 }
 
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 #[cfg(test)]
 mod tests {
     use super::*;

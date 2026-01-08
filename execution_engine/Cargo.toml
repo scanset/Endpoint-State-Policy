@@ -1,0 +1,52 @@
+[package]
+name = "execution_engine"
+version = "0.2.0"
+edition = "2021"
+authors = ["ESP Team"]
+description = "ESP scanner base"
+license.workspace = true
+keywords = ["esp", "Endpoint State Policy", "agent", "scanner"]
+
+[lib]
+name = "execution_engine"
+crate-type = ["lib", "cdylib"]
+
+
+[dependencies]
+# Workspace dependency on common
+common = { workspace = true, features = ["attestation", "full-results"] }
+
+# Use workspace dependencies where applicable
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+
+# Additional dependencies specific to scanner SDK
+regex = "1.0"
+hostname = "0.3"
+uuid = { version = "1.0", features = ["v4"] }
+base64 = "0.21"
+
+# Optional logging integration
+log = { version = "0.4", optional = true }
+
+# CLI dependencies (optional)
+clap = { version = "4.4", features = ["derive"], optional = true }
+num_cpus = { version = "1.16", optional = true }
+wait-timeout = "0.2"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3.0"
+criterion = "0.5"
+
+[features]
+default = ["cli"]
+logging = ["log"]
+validation = []
+cli = ["clap", "num_cpus"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

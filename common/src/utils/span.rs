@@ -287,10 +287,14 @@ impl SourceMap {
         let line = self
             .line_starts
             .binary_search(&offset)
-            .unwrap_or_else(|i| i - 1);
+            .unwrap_or_else(|i| i.saturating_sub(1));
 
-        let line_start = self.line_starts[line];
-        let column = self.source[line_start..offset].chars().count();
+        let line_start = self.line_starts.get(line).copied().unwrap_or(0);
+        let column = self
+            .source
+            .get(line_start..offset)
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
 
         Position::new(offset, (line + 1) as u32, (column + 1) as u32)
     }
@@ -302,18 +306,17 @@ impl SourceMap {
         }
 
         let line_idx = (line_num - 1) as usize;
-        if line_idx >= self.line_starts.len() {
-            return None;
-        }
+        let start = self.line_starts.get(line_idx).copied()?;
 
-        let start = self.line_starts[line_idx];
-        let end = if line_idx + 1 < self.line_starts.len() {
-            self.line_starts[line_idx + 1] - 1
-        } else {
-            self.source.len()
-        };
+        let end = self
+            .line_starts
+            .get(line_idx + 1)
+            .map(|&next| next.saturating_sub(1))
+            .unwrap_or(self.source.len());
 
-        Some(self.source[start..end].trim_end_matches('\n'))
+        self.source
+            .get(start..end)
+            .map(|s| s.trim_end_matches('\n'))
     }
 
     /// Get the text covered by a span

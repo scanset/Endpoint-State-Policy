@@ -1,0 +1,83 @@
+# TCP Listener Validation Test
+# Tests TCP port listening state
+
+META
+    esp_scan_id `test-tcp-listener-001`
+    platform `linux`
+    criticality `medium`
+    control_mapping `CIS:3.4.1,NIST-800-53:CM-7`
+    title `Network Service Port Validation`
+    description `Validates expected TCP listeners and ensures prohibited ports are not listening`
+    version `1.0.0`
+    author `security-team`
+    tags `network,tcp,ports,services`
+META_END
+
+DEF
+    # ==========================================================================
+    # Objects - TCP ports to check
+    # ==========================================================================
+
+    # Port 2024 is listening in this environment (0x07E8)
+    OBJECT port_2024
+        port `2024`
+    OBJECT_END
+
+    # Common ports that should NOT be listening in a secure environment
+    OBJECT telnet_port
+        port `23`
+    OBJECT_END
+
+    OBJECT ftp_port
+        port `21`
+    OBJECT_END
+
+    OBJECT rsh_port
+        port `514`
+    OBJECT_END
+
+    # ==========================================================================
+    # States - Expected conditions
+    # ==========================================================================
+
+    # Port should be listening
+    STATE is_listening
+        listening boolean = true
+    STATE_END
+
+    # Port should NOT be listening
+    STATE not_listening
+        listening boolean = false
+    STATE_END
+
+    # ==========================================================================
+    # Criteria
+    # ==========================================================================
+    CRI AND
+        # Verify expected service is listening
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF is_listening
+            OBJECT_REF port_2024
+        CTN_END
+
+        # Verify insecure services are NOT listening
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF not_listening
+            OBJECT_REF telnet_port
+        CTN_END
+
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF not_listening
+            OBJECT_REF ftp_port
+        CTN_END
+
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF not_listening
+            OBJECT_REF rsh_port
+        CTN_END
+    CRI_END
+DEF_END

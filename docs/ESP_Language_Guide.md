@@ -82,18 +82,17 @@ When VS Code opens, click "Reopen in Container" or press `F1` and select "Dev Co
 **Step 4: Verify installation**
 
 ```bash
-cd agent
-cargo run -- ../esp/set_test.esp
+make run ESP=esp/
 ```
 
 ### Scanner Usage
 
 ```bash
 # Single policy scan
-cargo run -- path/to/policy.esp
+make run ESP=path/to/policy.esp
 
 # Batch directory scan
-cargo run -- path/to/policies/
+make run ESP=path/to/policies/
 ```
 
 ### Logging Levels
@@ -110,11 +109,7 @@ Control verbosity with `ESP_LOGGING_MIN_LEVEL`:
 ```bash
 # Linux/Mac
 export ESP_LOGGING_MIN_LEVEL=debug
-cargo run -- policy.esp
-
-# Windows PowerShell
-$env:ESP_LOGGING_MIN_LEVEL="debug"
-cargo run -- policy.esp
+make run ESP=esp/test_file_metadata.esp
 ```
 
 ---
@@ -136,14 +131,20 @@ cargo run -- policy.esp
 Check if `/etc/passwd` has secure permissions:
 
 ```esp
+META
+    esp_scan_id `my-first-policy`
+    platform `linux`
+    criticality `high`
+    control_mapping `CIS:6.1.1`
+META_END
+
 DEF
     STATE secure_permissions
         permissions string = `0644`
     STATE_END
 
     OBJECT etc_passwd
-        path `/etc`
-        filename `passwd`
+        path `/etc/passwd`
     OBJECT_END
 
     CRI AND
@@ -160,6 +161,7 @@ DEF_END
 
 | Block | Purpose |
 |-------|---------|
+| `META...META_END` | Required metadata for attestations |
 | `DEF...DEF_END` | Wraps the entire policy definition |
 | `STATE...STATE_END` | Defines expected conditions |
 | `OBJECT...OBJECT_END` | Identifies what to check |
@@ -169,25 +171,28 @@ DEF_END
 
 ### Understanding Objects
 
-Objects identify targets on your system (files, services, packages).
+Objects identify targets on your system. The fields required depend on the CTN type being used.
 
 ```esp
-# File object
+# File object (for file_metadata, file_content)
 OBJECT ssh_config
-    path `/etc/ssh`
-    filename `sshd_config`
+    path `/etc/ssh/sshd_config`
 OBJECT_END
 
-# Package object
-OBJECT openssh_package
-    package_name `openssh-server`
+# TCP port object (for tcp_listener)
+OBJECT ssh_port
+    port `22`
 OBJECT_END
 
-# Service object
-OBJECT firewall_service
-    service_name `firewalld`
+# Kubernetes resource (for k8s_resource)
+OBJECT apiserver_pod
+    kind `Pod`
+    namespace `kube-system`
+    label_selector `component=kube-apiserver`
 OBJECT_END
 ```
+
+**Important:** Each CTN type has specific object field requirements. See [contract_kit/docs/](../contract_kit/docs/) for complete specifications per CTN type.
 
 ### Understanding States
 
@@ -196,18 +201,19 @@ States define what should be true about an object.
 ```esp
 STATE secure_file
     permissions string = `0600`
-    owner string = `root`
+    owner string = `0`
 STATE_END
 
-STATE service_running
-    status string = `active`
-    enabled boolean = true
+STATE is_listening
+    listening boolean = true
 STATE_END
 
 STATE required_config
     content string contains `PermitRootLogin no`
 STATE_END
 ```
+
+**Important:** Each CTN type supports specific state fields and operations. See [contract_kit/docs/](../contract_kit/docs/) for what fields are available per CTN type.
 
 ### Operators
 
@@ -229,8 +235,6 @@ STATE_END
 | `ine` | Case-insensitive not equals | `mode string ine \`DEBUG\`` |
 | `pattern_match` | Regex pattern | `content string pattern_match \`^[0-9]+$\`` |
 | `matches` | Regex (alias) | `name string matches \`^app-.*\`` |
-| `subset_of` | Set subset | `tags string subset_of VAR allowed_tags` |
-| `superset_of` | Set superset | `roles string superset_of VAR required_roles` |
 
 ### Connecting Objects and States with CTN
 
@@ -244,7 +248,7 @@ CTN criterion_type
 CTN_END
 ```
 
-- `criterion_type` — The CTN type (e.g., `file_content`, `rpm_package`, `systemd_service`)
+- `criterion_type` — The CTN type (e.g., `file_metadata`, `file_content`, `tcp_listener`)
 - `existence_check` — How many objects must exist
 - `item_check` — How many objects must pass state validation
 - `state_operator` — How to combine multiple state fields (optional)
@@ -266,107 +270,192 @@ CTN_END
 | | `OR` | Any state field can match |
 | | `ONE` | Exactly one state field must match |
 
-**Note:** Item checks do NOT include `any` or `none` — use `at_least_one` or `none_satisfy` instead.
-
-**Example with state operator:**
-
-```esp
-CTN file_content
-    TEST all all OR
-    STATE_REF has_setting_a
-    STATE_REF has_setting_b
-    OBJECT_REF config_file
-CTN_END
-```
-
 ---
 
 ## Part 3: Building Your First Policy
 
-### Scenario
+### Example: File Metadata Validation
 
-Your security team requires SSH on all Linux servers to:
-
-1. Have the OpenSSH package installed
-2. Have the SSH service running
-3. Disable root login
-4. Use protocol version 2
-
-### Complete SSH Hardening Policy
+This example is from `esp/test_file_metadata.esp` — a complete policy that validates system file permissions.
 
 ```esp
 META
+    esp_scan_id `test-file-metadata-001`
+    platform `linux`
+    criticality `high`
+    control_mapping `CIS:6.1.1,CIS:6.1.2,NIST-800-53:AC-6`
+    title `Critical System File Permissions`
+    description `Validates that critical system files have correct permissions and ownership`
     version `1.0.0`
     author `security-team`
-    platform `linux`
-    description `SSH hardening policy`
-    severity `high`
+    tags `file-permissions,linux,hardening`
 META_END
 
 DEF
-    # Objects
-    OBJECT openssh_pkg
-        package_name `openssh-server`
+    # Variables for reusable values
+    VAR root_uid string `0`
+    VAR root_gid string `0`
+    VAR shadow_gid string `42`
+
+    # Objects - System files to check
+    OBJECT passwd_file
+        path `/etc/passwd`
     OBJECT_END
 
-    OBJECT sshd_service
-        service_name `sshd`
+    OBJECT group_file
+        path `/etc/group`
     OBJECT_END
 
-    OBJECT sshd_config
-        path `/etc/ssh`
-        filename `sshd_config`
+    OBJECT shadow_file
+        path `/etc/shadow`
     OBJECT_END
 
-    # States
-    STATE package_installed
-        installed boolean = true
+    # States - Expected conditions
+    STATE passwd_permissions
+        exists boolean = true
+        permissions string = `0644`
+        owner string = VAR root_uid
+        group string = VAR root_gid
     STATE_END
 
-    STATE service_active
-        status string = `active`
+    STATE group_permissions
+        exists boolean = true
+        permissions string = `0644`
+        owner string = VAR root_uid
+        group string = VAR root_gid
     STATE_END
 
-    STATE no_root_login
-        content string contains `PermitRootLogin no`
+    STATE shadow_permissions
+        exists boolean = true
+        permissions string = `0640`
+        owner string = VAR root_uid
+        group string = VAR shadow_gid
     STATE_END
 
-    STATE protocol_two
-        content string contains `Protocol 2`
-    STATE_END
-
-    # Criteria - all checks must pass
+    # Criteria - All checks must pass
     CRI AND
-        CTN rpm_package
+        CTN file_metadata
             TEST all all
-            STATE_REF package_installed
-            OBJECT_REF openssh_pkg
+            STATE_REF passwd_permissions
+            OBJECT_REF passwd_file
         CTN_END
 
-        CTN systemd_service
+        CTN file_metadata
             TEST all all
-            STATE_REF service_active
-            OBJECT_REF sshd_service
+            STATE_REF group_permissions
+            OBJECT_REF group_file
         CTN_END
 
-        CTN file_content
+        CTN file_metadata
             TEST all all
-            STATE_REF no_root_login
-            OBJECT_REF sshd_config
-        CTN_END
-
-        CTN file_content
-            TEST all all
-            STATE_REF protocol_two
-            OBJECT_REF sshd_config
+            STATE_REF shadow_permissions
+            OBJECT_REF shadow_file
         CTN_END
     CRI_END
 DEF_END
 ```
 
+**Run this policy:**
+
+```bash
+make run ESP=esp/test_file_metadata.esp
+```
+
+**Key points:**
+
+1. **META block** is required with `esp_scan_id`, `platform`, `criticality`, and `control_mapping`
+2. **Variables** (`VAR`) let you reuse values like UIDs
+3. **Objects** use `path` field for file-based CTN types (see [ctn_file_metadata.md](../contract_kit/docs/ctn_file_metadata.md))
+4. **States** use fields supported by the CTN type
+5. **CRI AND** means all checks must pass
+
 ---
 
 ## Part 4: Intermediate Patterns
+
+### Example: File Content Validation
+
+This example is from `esp/test_file_content.esp` — validates file contents using string operations.
+
+```esp
+META
+    esp_scan_id `test-file-content-001`
+    platform `linux`
+    criticality `medium`
+    control_mapping `CIS:5.4.1,NIST-800-53:AC-2`
+    title `System Account Configuration Validation`
+    description `Validates critical system file content for security compliance`
+    version `1.0.0`
+    author `security-team`
+    tags `file-content,linux,accounts`
+META_END
+
+DEF
+    OBJECT passwd_file
+        path `/etc/passwd`
+    OBJECT_END
+
+    OBJECT group_file
+        path `/etc/group`
+    OBJECT_END
+
+    # Verify root account has UID 0 and valid shell
+    STATE root_account_valid
+        content string contains `root:x:0:0:`
+        content string pattern_match `^root:.*:/bin/bash$`
+    STATE_END
+
+    # Verify system accounts use nologin shell
+    STATE daemon_nologin
+        content string contains `daemon:x:1:1:`
+        content string contains `/usr/sbin/nologin`
+    STATE_END
+
+    # Verify no accounts have empty password field
+    STATE no_empty_passwords
+        content string not_contains `::0:`
+    STATE_END
+
+    # Verify shadow group exists
+    STATE shadow_group_exists
+        content string contains `shadow:x:`
+    STATE_END
+
+    CRI AND
+        CTN file_content
+            TEST all all
+            STATE_REF root_account_valid
+            OBJECT_REF passwd_file
+        CTN_END
+
+        CTN file_content
+            TEST all all
+            STATE_REF daemon_nologin
+            OBJECT_REF passwd_file
+        CTN_END
+
+        CTN file_content
+            TEST all all
+            STATE_REF no_empty_passwords
+            OBJECT_REF passwd_file
+        CTN_END
+
+        CTN file_content
+            TEST all all
+            STATE_REF shadow_group_exists
+            OBJECT_REF group_file
+        CTN_END
+    CRI_END
+DEF_END
+```
+
+**Key techniques:**
+- Multiple state fields with same name (`content`) using different operations
+- `contains` for substring matching
+- `pattern_match` for regex validation
+- `not_contains` for negative assertions
+
+See [ctn_file_content.md](../contract_kit/docs/ctn_file_content.md) for all supported operations.
 
 ### Using Variables
 
@@ -375,26 +464,17 @@ Variables define values once for reuse throughout the policy.
 ```esp
 DEF
     VAR config_dir string `/etc/app`
-    VAR required_owner string `appuser`
-    VAR min_perms string `0640`
+    VAR required_owner string `0`
+    VAR secure_perms string `0640`
 
     OBJECT app_config
         path VAR config_dir
-        filename `config.ini`
     OBJECT_END
 
     STATE secure_config
         owner string = VAR required_owner
-        permissions string = VAR min_perms
+        permissions string = VAR secure_perms
     STATE_END
-
-    CRI AND
-        CTN config_check
-            TEST all all
-            STATE_REF secure_config
-            OBJECT_REF app_config
-        CTN_END
-    CRI_END
 DEF_END
 ```
 
@@ -409,16 +489,16 @@ DEF_END
 
 ```esp
 CRI AND
-    CTN pkg_check
+    CTN file_metadata
         TEST all all
-        STATE_REF package_installed
-        OBJECT_REF security_pkg
+        STATE_REF secure_permissions
+        OBJECT_REF config_file
     CTN_END
 
-    CTN service_check
-        TEST all all
-        STATE_REF service_running
-        OBJECT_REF security_service
+    CTN tcp_listener
+        TEST at_least_one all
+        STATE_REF is_listening
+        OBJECT_REF app_port
     CTN_END
 CRI_END
 ```
@@ -427,16 +507,16 @@ CRI_END
 
 ```esp
 CRI OR
-    CTN firewalld_check
-        TEST all all
-        STATE_REF service_active
-        OBJECT_REF firewalld_service
+    CTN tcp_listener
+        TEST at_least_one all
+        STATE_REF is_listening
+        OBJECT_REF port_8080
     CTN_END
 
-    CTN iptables_check
-        TEST all all
-        STATE_REF service_active
-        OBJECT_REF iptables_service
+    CTN tcp_listener
+        TEST at_least_one all
+        STATE_REF is_listening
+        OBJECT_REF port_8443
     CTN_END
 CRI_END
 ```
@@ -447,33 +527,21 @@ Combine AND and OR for complex requirements:
 
 ```esp
 CRI OR
-    # Option 1: firewalld installed AND active
+    # Option 1: port 8080 available
     CRI AND
-        CTN firewalld_pkg
-            TEST all all
-            STATE_REF pkg_installed
-            OBJECT_REF firewalld_package
-        CTN_END
-
-        CTN firewalld_svc
-            TEST all all
-            STATE_REF svc_active
-            OBJECT_REF firewalld_service
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF is_listening
+            OBJECT_REF port_8080
         CTN_END
     CRI_END
 
-    # Option 2: iptables installed AND active
+    # Option 2: port 8443 available
     CRI AND
-        CTN iptables_pkg
-            TEST all all
-            STATE_REF pkg_installed
-            OBJECT_REF iptables_package
-        CTN_END
-
-        CTN iptables_svc
-            TEST all all
-            STATE_REF svc_active
-            OBJECT_REF iptables_service
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF is_listening
+            OBJECT_REF port_8443
         CTN_END
     CRI_END
 CRI_END
@@ -482,6 +550,87 @@ CRI_END
 ---
 
 ## Part 5: Advanced Techniques
+
+### Example: TCP Listener Validation
+
+This example is from `esp/test_tcp_listener.esp` — validates network port states.
+
+```esp
+META
+    esp_scan_id `test-tcp-listener-001`
+    platform `linux`
+    criticality `medium`
+    control_mapping `CIS:3.4.1,NIST-800-53:CM-7`
+    title `Network Service Port Validation`
+    description `Validates expected TCP listeners and ensures prohibited ports are not listening`
+    version `1.0.0`
+    author `security-team`
+    tags `network,tcp,ports,services`
+META_END
+
+DEF
+    # Ports to check
+    OBJECT port_2024
+        port `2024`
+    OBJECT_END
+
+    OBJECT telnet_port
+        port `23`
+    OBJECT_END
+
+    OBJECT ftp_port
+        port `21`
+    OBJECT_END
+
+    OBJECT rsh_port
+        port `514`
+    OBJECT_END
+
+    # States
+    STATE is_listening
+        listening boolean = true
+    STATE_END
+
+    STATE not_listening
+        listening boolean = false
+    STATE_END
+
+    CRI AND
+        # Verify expected service is listening
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF is_listening
+            OBJECT_REF port_2024
+        CTN_END
+
+        # Verify insecure services are NOT listening
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF not_listening
+            OBJECT_REF telnet_port
+        CTN_END
+
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF not_listening
+            OBJECT_REF ftp_port
+        CTN_END
+
+        CTN tcp_listener
+            TEST at_least_one all
+            STATE_REF not_listening
+            OBJECT_REF rsh_port
+        CTN_END
+    CRI_END
+DEF_END
+```
+
+**Key techniques:**
+- Checking that ports ARE listening (expected services)
+- Checking that ports are NOT listening (prohibited services)
+- Using `TEST at_least_one all` for port checks
+
+See [ctn_tcp_listener.md](../contract_kit/docs/ctn_tcp_listener.md) for the complete tcp_listener specification.
 
 ### Sets
 
@@ -496,18 +645,15 @@ Group multiple objects together with SET operations.
 ```esp
 DEF
     OBJECT ssh_config
-        path `/etc/ssh`
-        filename `sshd_config`
+        path `/etc/ssh/sshd_config`
     OBJECT_END
 
     OBJECT sudoers_file
-        path `/etc`
-        filename `sudoers`
+        path `/etc/sudoers`
     OBJECT_END
 
     OBJECT hosts_file
-        path `/etc`
-        filename `hosts`
+        path `/etc/hosts`
     OBJECT_END
 
     SET critical_configs union
@@ -521,7 +667,7 @@ DEF
     STATE_END
 
     CRI AND
-        CTN set_check
+        CTN file_metadata
             TEST all all
             STATE_REF files_exist
             OBJECT
@@ -576,7 +722,7 @@ Common patterns:
 
 ### Record Checks
 
-Validate structured data (JSON, configuration files, API responses):
+Validate structured data (JSON, configuration files, API responses). Used with CTN types like `json_record` and `k8s_resource`.
 
 ```esp
 STATE json_config_valid
@@ -589,30 +735,17 @@ STATE json_config_valid
 STATE_END
 ```
 
-**Record block syntax:**
-
-```esp
-record [data_type]
-    field path type operation value [entity_check]
-    ...
-record_end
-```
-
-The data type after `record` is optional. When present, it specifies the expected data format.
-
-**Note:** `field` is a context-sensitive identifier, not a keyword. It has special meaning only inside record blocks.
-
 **Field path syntax:**
 
 | Syntax | Meaning | Example |
 |--------|---------|---------|
 | `name` | Simple field | `status` |
 | `a.b.c` | Nested field | `settings.security.enabled` |
-| `arr.0` | Array index | `containers.0.image` |
+| `arr.0` | Array index (0-based) | `containers.0.image` |
 | `arr.*` | Array wildcard | `containers.*.name` |
 | `a.*.b` | Nested wildcard | `spec.containers.*.ports.*.containerPort` |
 
-**Entity checks** (only valid on record fields with wildcards or arrays):
+**Entity checks** (for wildcards/arrays):
 
 | Check | Passes When |
 |-------|-------------|
@@ -621,47 +754,7 @@ The data type after `record` is optional. When present, it specifies the expecte
 | `none` | No elements pass |
 | `only_one` | Exactly one element passes |
 
-**Kubernetes example:**
-
-```esp
-STATE uses_rbac
-    record
-        field spec.containers.0.command string contains `--authorization-mode=Node,RBAC` at_least_one
-    record_end
-STATE_END
-```
-
-This checks if ANY element in the `command` array contains the RBAC flag.
-
-**Direct record operation** (validate entire record):
-
-```esp
-STATE has_required_content
-    record string
-        contains `required_value`
-    record_end
-STATE_END
-```
-
-### TEST Existence Checks
-
-| Check | Passes When |
-|-------|-------------|
-| `all` | Every object exists and passes |
-| `any` | At least one object exists and passes |
-| `none` | No objects exist |
-| `at_least_one` | One or more objects exist |
-| `only_one` | Exactly one object exists and passes |
-
-**Check for forbidden files:**
-
-```esp
-CTN backup_check
-    TEST none all
-    STATE_REF should_not_exist
-    OBJECT_REF backup_files
-CTN_END
-```
+See [ctn_json_record.md](../contract_kit/docs/ctn_json_record.md) and [ctn_k8s_resource.md](../contract_kit/docs/ctn_k8s_resource.md) for record check usage.
 
 ### BEHAVIOR Directives
 
@@ -674,7 +767,6 @@ Control scanner behavior without changing what you check:
 | `include_hidden` | Include dotfiles |
 | `follow_symlinks` | Follow symbolic links |
 | `timeout N` | Command timeout in seconds |
-| `cache_results` | Cache collection results |
 
 ```esp
 OBJECT log_directory
@@ -682,90 +774,6 @@ OBJECT log_directory
     behavior recursive_scan max_depth 3 include_hidden false
 OBJECT_END
 ```
-
-### Parameters Block
-
-Pass parameters to collectors (e.g., command arguments, API options):
-
-```esp
-OBJECT process_list
-    module_name `Microsoft.PowerShell.Management`
-    verb `Get`
-    noun `Process`
-
-    parameters string
-        Name `sshd`
-        ErrorAction `SilentlyContinue`
-    parameters_end
-OBJECT_END
-```
-
-### Select Block
-
-Specify which fields to collect from an object:
-
-```esp
-OBJECT config_file
-    path `/etc/app`
-    filename `config.json`
-
-    select record
-        content text
-        owner uid
-        permissions mode
-        size bytes
-    select_end
-OBJECT_END
-```
-
-### Module Elements
-
-For PowerShell and other module-based collectors:
-
-| Field | Purpose |
-|-------|---------|
-| `module_name` | Full module name |
-| `verb` | PowerShell verb (Get, Set, etc.) |
-| `noun` | PowerShell noun |
-| `module_id` | Module identifier |
-| `module_version` | Required module version |
-
-```esp
-OBJECT security_policy
-    module_name `SecurityPolicy`
-    module_version `1.0.0`
-    verb `Get`
-    noun `SecuritySetting`
-
-    parameters string
-        Category `AccountPolicy`
-    parameters_end
-OBJECT_END
-```
-
-### Inline Definitions
-
-CTN blocks can contain inline (local) states and objects that are not referenceable elsewhere:
-
-```esp
-CTN file_content
-    TEST all all
-
-    # Inline state (local to this CTN)
-    STATE
-        content string contains `secure=true`
-        permissions string = `0600`
-    STATE_END
-
-    # Inline object (local to this CTN)
-    OBJECT
-        path `/tmp`
-        filename `temp.conf`
-    OBJECT_END
-CTN_END
-```
-
-Inline definitions are useful for one-off checks that don't need to be reused.
 
 ### RUN Operations
 
@@ -779,20 +787,7 @@ Compute values at runtime:
 | `REGEX_CAPTURE` | Extract via regex | Parse structured text |
 | `ARITHMETIC` | Math operations | Calculate thresholds |
 | `COUNT` | Count collection items | Validate array length |
-| `UNIQUE` | Remove duplicates | Deduplicate values |
-| `MERGE` | Combine collections | Join arrays |
 | `EXTRACT` | Get field from object | Access collected data |
-| `END` | Get string suffix | Extract file extension |
-
-**Context-sensitive identifiers in RUN blocks:**
-
-The following are identifiers with special meaning inside RUN blocks (not keywords):
-- `literal` — Literal value parameter
-- `pattern` — Regex pattern
-- `delimiter` — Split delimiter
-- `character` — Character specification
-- `start` — Start position
-- `length` — Length value
 
 **CONCAT example:**
 
@@ -814,42 +809,6 @@ RUN computed_threshold ARITHMETIC
 RUN_END
 ```
 
-**SPLIT example:**
-
-```esp
-RUN path_parts SPLIT
-    VAR file_path
-    delimiter `/`
-RUN_END
-```
-
-**SUBSTRING example:**
-
-```esp
-RUN prefix SUBSTRING
-    VAR hostname
-    start 0
-    length 3
-RUN_END
-```
-
-**REGEX_CAPTURE example:**
-
-```esp
-RUN version_number REGEX_CAPTURE
-    VAR version_string
-    pattern `v([0-9]+\.[0-9]+)`
-RUN_END
-```
-
-**EXTRACT example:**
-
-```esp
-RUN package_version EXTRACT
-    OBJ openssl_pkg version
-RUN_END
-```
-
 ### String Literals
 
 ESP uses backticks for string literals:
@@ -860,32 +819,14 @@ VAR path string `/etc/ssh/sshd_config`
 
 **Escaping backticks:**
 
-Use double backticks for a literal backtick character:
-
 ```esp
 VAR message string `This has a ``backtick`` inside`
-```
-
-**Empty string:**
-
-```esp
-VAR empty string ``
 ```
 
 **Raw strings** (no escape processing):
 
 ```esp
 VAR regex string r`^\d{3}-\d{4}$`
-```
-
-**Multiline strings:**
-
-```esp
-VAR script string ```
-#!/bin/bash
-echo "Hello"
-exit 0
-```
 ```
 
 ### Type System
@@ -901,106 +842,19 @@ exit 0
 | `version` | Semantic version | `2.4.1` |
 | `evr_string` | Package version (epoch:version-release) | `2:1.8.0-1.el9` |
 
-Data types are identifiers, not keywords — they're parsed semantically based on context.
-
 ---
 
 ## Part 6: Real-World Examples
 
-### RHEL 9 STIG: Password Complexity
-
-```esp
-META
-    version `1.0.0`
-    control_framework `STIG`
-    control `RHEL-09-611015`
-    severity `medium`
-    description `Password complexity requirements`
-META_END
-
-DEF
-    VAR config_path string `/etc/security`
-
-    OBJECT pwquality_conf
-        path VAR config_path
-        filename `pwquality.conf`
-    OBJECT_END
-
-    STATE complexity_requirements
-        record
-            field minlen int >= 15
-            field dcredit int = -1
-            field ucredit int = -1
-            field lcredit int = -1
-            field ocredit int = -1
-        record_end
-    STATE_END
-
-    CRI AND
-        CTN file_content
-            TEST all all
-            STATE_REF complexity_requirements
-            OBJECT_REF pwquality_conf
-        CTN_END
-    CRI_END
-DEF_END
-```
-
-### CIS Benchmark: Firewall Configuration
-
-```esp
-META
-    version `1.0.0`
-    control_framework `CIS`
-    control `3.5.1.1`
-    severity `high`
-META_END
-
-DEF
-    STATE pkg_installed
-        installed boolean = true
-    STATE_END
-
-    STATE service_running
-        status string = `active`
-        enabled boolean = true
-    STATE_END
-
-    OBJECT firewalld_pkg
-        package_name `firewalld`
-    OBJECT_END
-
-    OBJECT firewalld_svc
-        service_name `firewalld`
-    OBJECT_END
-
-    CRI AND
-        CTN rpm_package
-            TEST all all
-            STATE_REF pkg_installed
-            OBJECT_REF firewalld_pkg
-        CTN_END
-
-        CTN systemd_service
-            TEST all all
-            STATE_REF service_running
-            OBJECT_REF firewalld_svc
-        CTN_END
-    CRI_END
-DEF_END
-```
-
-### Kubernetes STIG: API Server RBAC
+### Kubernetes: API Server RBAC Validation
 
 ```esp
 META
     esp_scan_id `stig-v242382-rbac-auth`
-    control_framework `DISA-STIG`
-    control `V-242382`
-    title `Kubernetes API Server must have RBAC authorization enabled`
     platform `kubernetes`
     criticality `high`
-    agent_type `controller`
+    control_mapping `DISA-STIG:V-242382,NIST-800-53:AC-6`
+    title `Kubernetes API Server must have RBAC authorization enabled`
     tags `stig,kubernetes,apiserver,authorization,rbac`
 META_END
 
@@ -1027,36 +881,60 @@ DEF
 DEF_END
 ```
 
-This policy validates that the Kubernetes API server pod has RBAC authorization enabled by checking if any element in the container's command array contains the required flag.
+See [ctn_k8s_resource.md](../contract_kit/docs/ctn_k8s_resource.md) for Kubernetes resource validation.
+
+### JSON Configuration Validation
+
+```esp
+META
+    esp_scan_id `json-config-validation`
+    platform `linux`
+    criticality `medium`
+    control_mapping `CIS:5.1.1`
+    title `Application Configuration Validation`
+META_END
+
+DEF
+    OBJECT app_config
+        path `/etc/app/config.json`
+    OBJECT_END
+
+    STATE valid_config
+        record
+            field version string = `2.0`
+            field database.host string = `localhost`
+            field database.port int > 1024
+            field security.enabled boolean = true
+            field users.*.role string = `user` all
+        record_end
+    STATE_END
+
+    CRI AND
+        CTN json_record
+            TEST all all
+            STATE_REF valid_config
+            OBJECT_REF app_config
+        CTN_END
+    CRI_END
+DEF_END
+```
+
+See [ctn_json_record.md](../contract_kit/docs/ctn_json_record.md) for JSON validation.
 
 ---
 
 ## Cookbook: Common Patterns
 
-This section provides copy-paste solutions for common compliance scenarios.
-
 ### Pattern 1: ALL Files Must Have Correct Permissions
-
-**Question:** "I need to check that ALL sensitive files have mode 0600."
 
 ```esp
 STATE secure_permissions
     permissions string = `0600`
 STATE_END
 
-OBJECT shadow_file
-    path `/etc`
-    filename `shadow`
-OBJECT_END
-
-OBJECT gshadow_file
-    path `/etc`
-    filename `gshadow`
-OBJECT_END
-
 SET sensitive_files union
-    shadow_file
-    gshadow_file
+    OBJECT_REF shadow_file
+    OBJECT_REF gshadow_file
 SET_END
 
 CRI AND
@@ -1068,89 +946,27 @@ CRI AND
 CRI_END
 ```
 
-**Key insight:** `TEST all all` means "all objects must exist, and all must satisfy the state."
-
-### Pattern 2: AT LEAST ONE Service Must Be Running
-
-**Question:** "Either `firewalld` OR `iptables` must be running."
+### Pattern 2: Verify Service is NOT Running
 
 ```esp
-STATE service_active
-    status string = `active`
+STATE not_listening
+    listening boolean = false
 STATE_END
 
-OBJECT firewalld
-    service_name `firewalld`
-OBJECT_END
-
-OBJECT iptables
-    service_name `iptables`
+OBJECT telnet_port
+    port `23`
 OBJECT_END
 
 CRI AND
-    CTN systemd_service
-        TEST any at_least_one    # Any can exist, at least one must pass
-        STATE_REF service_active
-        OBJECT_REF firewalld
-        OBJECT_REF iptables
+    CTN tcp_listener
+        TEST at_least_one all
+        STATE_REF not_listening
+        OBJECT_REF telnet_port
     CTN_END
 CRI_END
 ```
 
-**Key insight:** `TEST any at_least_one` means "any objects can exist, but at least one must satisfy the state."
-
-### Pattern 3: NO Prohibited Software Exists
-
-**Question:** "Ensure telnet is NOT installed."
-
-```esp
-STATE package_installed
-    installed boolean = true
-STATE_END
-
-OBJECT telnet_pkg
-    package_name `telnet`
-OBJECT_END
-
-CRI AND
-    CTN rpm_package
-        TEST none none_satisfy   # No objects should exist that satisfy the state
-        STATE_REF package_installed
-        OBJECT_REF telnet_pkg
-    CTN_END
-CRI_END
-```
-
-**Key insight:** `TEST none none_satisfy` means "no objects should exist, and if any do, none should satisfy the state."
-
-### Pattern 4: EXACTLY ONE Configuration Value
-
-**Question:** "There should be exactly one `authorized_keys` file for root."
-
-```esp
-STATE file_exists
-    exists boolean = true
-STATE_END
-
-OBJECT root_authkeys
-    path `/root/.ssh`
-    filename `authorized_keys`
-OBJECT_END
-
-CRI AND
-    CTN file_metadata
-        TEST only_one only_one   # Exactly one must exist AND exactly one must pass
-        STATE_REF file_exists
-        OBJECT_REF root_authkeys
-    CTN_END
-CRI_END
-```
-
-**Key insight:** `TEST only_one only_one` means "exactly one object must exist and exactly one must pass."
-
-### Pattern 5: Multiple Conditions with OR Logic
-
-**Question:** "Config must have EITHER setting A OR setting B."
+### Pattern 3: Multiple Conditions with OR Logic
 
 ```esp
 STATE has_setting_a
@@ -1161,14 +977,9 @@ STATE has_setting_b
     content string contains `SettingB=enabled`
 STATE_END
 
-OBJECT config_file
-    path `/etc`
-    filename `app.conf`
-OBJECT_END
-
 CRI AND
     CTN file_content
-        TEST all all OR          # All objects, all must pass, states combined with OR
+        TEST all all OR          # States combined with OR
         STATE_REF has_setting_a
         STATE_REF has_setting_b
         OBJECT_REF config_file
@@ -1176,183 +987,7 @@ CRI AND
 CRI_END
 ```
 
-**Key insight:** The `OR` state operator means "any of the referenced states can match."
-
-### Pattern 6: Multiple Conditions with AND Logic (Default)
-
-**Question:** "Config must have BOTH setting A AND setting B."
-
-```esp
-STATE has_setting_a
-    content string contains `SettingA=enabled`
-STATE_END
-
-STATE has_setting_b
-    content string contains `SettingB=enabled`
-STATE_END
-
-OBJECT config_file
-    path `/etc`
-    filename `app.conf`
-OBJECT_END
-
-CRI AND
-    CTN file_content
-        TEST all all             # AND is the default state operator
-        STATE_REF has_setting_a
-        STATE_REF has_setting_b
-        OBJECT_REF config_file
-    CTN_END
-CRI_END
-```
-
-**Key insight:** When no state operator is specified, `AND` is the default — all states must match.
-
-### Pattern 7: Filtering Objects Before Validation
-
-**Question:** "Check permissions only on executable files."
-
-```esp
-STATE is_executable
-    permissions string contains `x`
-STATE_END
-
-STATE secure_ownership
-    owner string = `root`
-STATE_END
-
-OBJECT bin_files
-    path `/usr/local/bin`
-    pattern `*`
-OBJECT_END
-
-CRI AND
-    CTN file_metadata
-        TEST all all
-        STATE_REF secure_ownership
-        OBJECT bin_files
-            FILTER include is_executable   # Only check files that are executable
-        OBJECT_END
-    CTN_END
-CRI_END
-```
-
-**Key insight:** `FILTER include state_name` keeps only objects that satisfy the state before validation.
-
-### Pattern 8: Excluding Objects from Validation
-
-**Question:** "Check all config files EXCEPT backups."
-
-```esp
-STATE is_backup
-    filename string ends `.bak`
-STATE_END
-
-STATE valid_syntax
-    content string pattern_match `^[^#].*=.*`
-STATE_END
-
-OBJECT config_files
-    path `/etc/myapp`
-    pattern `*.conf`
-OBJECT_END
-
-CRI AND
-    CTN file_content
-        TEST all all
-        STATE_REF valid_syntax
-        OBJECT config_files
-            FILTER exclude is_backup   # Skip backup files
-        OBJECT_END
-    CTN_END
-CRI_END
-```
-
-**Key insight:** `FILTER exclude state_name` removes objects that satisfy the state.
-
-### Pattern 9: Checking Array Elements (Entity Check)
-
-**Question:** "ALL ports in the list must be above 1024."
-
-```esp
-STATE valid_port
-    port int > 1024 ALL          # ALL elements must satisfy
-STATE_END
-```
-
-**Question:** "AT LEAST ONE container must have resource limits."
-
-```esp
-STATE has_limits
-    record
-        field spec.containers.*.resources.limits string != `` AT_LEAST_ONE
-    record_end
-STATE_END
-```
-
-**Entity check options:**
-- `ALL` — Every element must match
-- `AT_LEAST_ONE` — At least one element must match
-- `NONE` — No elements may match
-- `ONLY_ONE` — Exactly one element must match
-
-### Pattern 10: Complex Criteria Logic
-
-**Question:** "Pass if (A AND B) OR (C AND D)."
-
-```esp
-CRI OR
-    CRI AND
-        CTN file_metadata
-            TEST all all
-            STATE_REF state_a
-            OBJECT_REF object_a
-        CTN_END
-        CTN file_metadata
-            TEST all all
-            STATE_REF state_b
-            OBJECT_REF object_b
-        CTN_END
-    CRI_END
-
-    CRI AND
-        CTN file_metadata
-            TEST all all
-            STATE_REF state_c
-            OBJECT_REF object_c
-        CTN_END
-        CTN file_metadata
-            TEST all all
-            STATE_REF state_d
-            OBJECT_REF object_d
-        CTN_END
-    CRI_END
-CRI_END
-```
-
-**Key insight:** CRI blocks can be nested to create complex logic trees.
-
-### Pattern 11: Negating Criteria
-
-**Question:** "Pass only if the check FAILS."
-
-```esp
-CRI AND
-    CRI NOT                      # Negate the result
-        CTN file_metadata
-            TEST all all
-            STATE_REF should_not_exist
-            OBJECT_REF bad_file
-        CTN_END
-    CRI_END
-CRI_END
-```
-
-**Key insight:** `CRI NOT` inverts the result of its contents.
-
-### Pattern 12: Using Variables for Reusability
-
-**Question:** "Same threshold used in multiple states."
+### Pattern 4: Using Variables for Reusability
 
 ```esp
 VAR min_password_length int 15
@@ -1362,17 +997,10 @@ STATE password_length
     minlen int >= VAR min_password_length
 STATE_END
 
-STATE lockout_threshold
-    deny int >= VAR min_password_length   # Reusing the same variable
-STATE_END
-
 OBJECT pwquality
     path VAR config_dir
-    filename `pwquality.conf`
 OBJECT_END
 ```
-
-**Key insight:** Variables enable consistent values across your policy.
 
 ### Quick Reference: TEST Combinations
 
@@ -1383,7 +1011,6 @@ OBJECT_END
 | Any can exist, at least one must pass | `TEST any at_least_one` |
 | None should exist | `TEST none none_satisfy` |
 | Exactly one must exist and pass | `TEST only_one only_one` |
-| All must exist, at least one must pass | `TEST all at_least_one` |
 | At least one must exist and pass | `TEST at_least_one at_least_one` |
 
 ---
@@ -1398,6 +1025,7 @@ OBJECT_END
 | Undefined reference | `STATE_REF` points to non-existent state | Check spelling |
 | Type mismatch | String operator on integer | Match operator to type |
 | Invalid backticks | Unbalanced backticks | Escape with ` `` ` |
+| Missing META fields | Required attestation fields missing | Add `esp_scan_id`, `platform`, `criticality`, `control_mapping` |
 
 ### Policy Always Fails
 
@@ -1405,6 +1033,9 @@ Common causes:
 - Using `CRI AND` when one check is impossible
 - Wrong operator (`!=` instead of `=`)
 - Incorrect TEST specification
+- Object field names don't match CTN type requirements
+
+**Solution:** Check [contract_kit/docs/](../contract_kit/docs/) for the correct field names and types for your CTN type.
 
 ### Policy Always Passes
 
@@ -1419,6 +1050,7 @@ Common causes:
 2. **Use debug logging** — `ESP_LOGGING_MIN_LEVEL=debug`
 3. **Check references** — verify all `STATE_REF` and `OBJECT_REF` exist
 4. **Validate types** — match operators to field types
+5. **Read CTN docs** — see [contract_kit/docs/](../contract_kit/docs/) for field requirements
 
 ---
 
@@ -1428,8 +1060,8 @@ Common causes:
 
 | Block | Syntax |
 |-------|--------|
-| Definition | `DEF ... DEF_END` |
 | Metadata | `META ... META_END` |
+| Definition | `DEF ... DEF_END` |
 | Variable | `VAR name type value` |
 | Object | `OBJECT name ... OBJECT_END` |
 | State | `STATE name ... STATE_END` |
@@ -1438,9 +1070,7 @@ Common causes:
 | Set | `SET name union/intersection/complement ... SET_END` |
 | Filter | `FILTER include/exclude ... FILTER_END` |
 | Run | `RUN name operation ... RUN_END` |
-| Parameters | `parameters type ... parameters_end` |
-| Select | `select type ... select_end` |
-| Record | `record type ... record_end` |
+| Record | `record ... record_end` |
 
 ### Common Patterns
 
@@ -1452,37 +1082,23 @@ STATE secure_perms
 STATE_END
 
 OBJECT file
-    path `/etc`
-    filename `shadow`
+    path `/etc/shadow`
 OBJECT_END
 ```
 
-**Service running check:**
+**TCP port check:**
 
 ```esp
-STATE service_active
-    status string = `active`
-    enabled boolean = true
+STATE is_listening
+    listening boolean = true
 STATE_END
 
-OBJECT svc
-    service_name `sshd`
+OBJECT port
+    port `22`
 OBJECT_END
 ```
 
-**Package installed check:**
-
-```esp
-STATE pkg_present
-    installed boolean = true
-STATE_END
-
-OBJECT pkg
-    package_name `openssh-server`
-OBJECT_END
-```
-
-**Configuration content check:**
+**File content check:**
 
 ```esp
 STATE required_setting
@@ -1490,20 +1106,9 @@ STATE required_setting
 STATE_END
 
 OBJECT config
-    path `/etc/ssh`
-    filename `sshd_config`
+    path `/etc/ssh/sshd_config`
 OBJECT_END
 ```
-
-### Operators
-
-| Category | Operators | Types |
-|----------|-----------|-------|
-| Comparison | `=` `!=` `>` `<` `>=` `<=` | All |
-| String | `contains` `starts` `ends` `not_contains` `not_starts` `not_ends` | string |
-| Case-insensitive | `ieq` `ine` | string |
-| Pattern | `pattern_match` `matches` | string |
-| Set | `subset_of` `superset_of` | Sets |
 
 ---
 
@@ -1511,113 +1116,77 @@ OBJECT_END
 
 ### Available CTN Types
 
-**File System:**
+| Type | Purpose | Documentation |
+|------|---------|---------------|
+| `file_metadata` | Permissions, owner, group, size, existence | [ctn_file_metadata.md](../contract_kit/docs/ctn_file_metadata.md) |
+| `file_content` | Content validation (contains, pattern_match) | [ctn_file_content.md](../contract_kit/docs/ctn_file_content.md) |
+| `json_record` | Structured JSON field validation | [ctn_json_record.md](../contract_kit/docs/ctn_json_record.md) |
+| `tcp_listener` | TCP port listening state | [ctn_tcp_listener.md](../contract_kit/docs/ctn_tcp_listener.md) |
+| `k8s_resource` | Kubernetes API resource validation | [ctn_k8s_resource.md](../contract_kit/docs/ctn_k8s_resource.md) |
+| `computed_values` | Validates RUN operations | [ctn_computed_values.md](../contract_kit/docs/ctn_computed_values.md) |
 
-| Type | Purpose |
-|------|---------|
-| `file_metadata` | Permissions, owner, group, size, existence |
-| `file_content` | Content validation (contains, pattern_match) |
-| `json_record` | Structured JSON validation |
+**Important:** Before writing a policy, read the CTN type documentation to understand:
+- Required object fields
+- Available state fields and operations
+- Collection behavior and performance characteristics
 
-**System:**
-
-| Type | Purpose |
-|------|---------|
-| `rpm_package` | Package installation and version |
-| `systemd_service` | Service status (active, enabled, loaded) |
-| `sysctl_parameter` | Kernel parameters |
-| `selinux_status` | SELinux enforcement mode |
-
-**Testing:**
-
-| Type | Purpose |
-|------|---------|
-| `computed_values` | Validates RUN operations |
-
-### Example Files
+### Example Policies
 
 | File | Description |
 |------|-------------|
-| `set_test.esp` | SET operations |
-| `ssh_config_check.esp` | SSH hardening |
-| `passwd_shadow_content.esp` | System file content |
-| `critical_file_permissions.esp` | File permissions |
-| `variable_usage.esp` | Variable examples |
+| `esp/test_file_metadata.esp` | File permissions and ownership validation |
+| `esp/test_file_content.esp` | File content validation with string operations |
+| `esp/test_tcp_listener.esp` | TCP port listening state validation |
 
 ### Running Examples
 
 ```bash
-# Single file
-cargo run -- esp/ssh_config_check.esp
+# File metadata validation
+make run ESP=esp/test_file_metadata.esp
 
-# With debug logging
-ESP_LOGGING_MIN_LEVEL=debug cargo run -- esp/set_test.esp
+# File content validation
+make run ESP=esp/test_file_content.esp
 
-# Batch scan
-cargo run -- esp/
+# TCP listener validation
+make run ESP=esp/test_tcp_listener.esp
+
+# All example policies
+make run ESP=esp/
 ```
 
 ---
 
 ## Part 10: META Block Reference
 
-The META block provides metadata about your policy. It's optional for parsing but **required for attestation generation**.
+The META block provides metadata about your policy. It is **required for attestation generation**.
 
 ### Required Fields
 
-These four fields are **mandatory** for policies that will generate compliance attestations:
-
-| Field | Description | Format | Example |
-|-------|-------------|--------|---------|
-| `esp_scan_id` | Unique policy identifier | String | `stig-v242382-rbac` |
-| `platform` | Target platform | String | `linux`, `windows`, `kubernetes` |
-| `criticality` | Severity level | Enum | `critical`, `high`, `medium`, `low`, `info` |
-| `control_mapping` | Compliance framework mappings | `FRAMEWORK:CONTROL_ID,...` | `NIST-800-53:AC-6,CIS:5.1.1` |
+| Field | Description | Example |
+|-------|-------------|---------|
+| `esp_scan_id` | Unique policy identifier | `stig-v242382-rbac` |
+| `platform` | Target platform | `linux`, `windows`, `kubernetes` |
+| `criticality` | Severity level | `critical`, `high`, `medium`, `low`, `info` |
+| `control_mapping` | Compliance framework mappings | `NIST-800-53:AC-6,CIS:5.1.1` |
 
 ### Optional Fields
 
-| Field | Description | Format | Example |
-|-------|-------------|--------|---------|
-| `version` | Policy version | Semver | `1.2.0` |
-| `esp_version` | Required ESP version | Semver | `1.0` |
-| `author` | Author/team name | String | `security-team` |
-| `date` | Creation/update date | ISO 8601 | `2024-01-15` |
-| `description` | Human-readable description | String | Any text |
-| `title` | Short policy title | String | `SSH Root Login Disabled` |
-| `category` | Classification | String | `security`, `compliance` |
-| `tags` | Comma-separated tags | String | `ssh,hardening,linux` |
-| `agent_type` | Scanner agent type | String | `controller`, `node` |
-| `weight` | Explicit weight (0.0-1.0) | Float | `0.95` |
+| Field | Description | Example |
+|-------|-------------|---------|
+| `version` | Policy version | `1.2.0` |
+| `author` | Author/team name | `security-team` |
+| `title` | Short policy title | `SSH Root Login Disabled` |
+| `description` | Human-readable description | Any text |
+| `tags` | Comma-separated tags | `ssh,hardening,linux` |
+| `weight` | Explicit weight (0.0-1.0) | `0.95` |
 
 ### Control Mapping Format
 
-The `control_mapping` field uses a specific format: `FRAMEWORK:CONTROL_ID` pairs separated by commas.
+Format: `FRAMEWORK:CONTROL_ID` pairs separated by commas.
 
 ```esp
 META
-    control_mapping `NIST-800-53:AC-6,CIS:5.1.1,STIG:V-242382`
-META_END
-```
-
-This maps the policy to:
-- NIST 800-53 control AC-6
-- CIS Benchmark control 5.1.1
-- DISA STIG control V-242382
-
-### Complete META Block Example
-
-```esp
-META
-    esp_scan_id `rhel9-stig-password-complexity`
-    version `1.0.0`
-    author `security-team`
-    platform `linux`
-    criticality `medium`
-    control_mapping `DISA-STIG:RHEL-09-611015,NIST-800-53:IA-5`
-    title `RHEL 9 Password Complexity Requirements`
-    description `Ensures password complexity meets STIG requirements`
-    tags `stig,password,authentication,rhel9`
-    agent_type `node`
+    control_mapping `NIST-800-53:AC-6,CIS:5.1.1,DISA-STIG:V-242382`
 META_END
 ```
 
@@ -1631,21 +1200,19 @@ META_END
 | `low` | 0.3 | Minor security improvement |
 | `info` | 0.1 | Informational, best practice |
 
-### Custom Fields
-
-The parser accepts any field name in the META block. Scanner implementations may define additional fields for platform-specific requirements:
+### Complete Example
 
 ```esp
 META
-    esp_scan_id `k8s-pod-security`
-    platform `kubernetes`
-    criticality `high`
-    control_mapping `CIS:5.2.1`
-
-    # Custom Kubernetes-specific fields
-    namespace `kube-system`
-    resource_type `Pod`
-    api_version `v1`
+    esp_scan_id `rhel9-stig-password-complexity`
+    version `1.0.0`
+    author `security-team`
+    platform `linux`
+    criticality `medium`
+    control_mapping `DISA-STIG:RHEL-09-611015,NIST-800-53:IA-5`
+    title `RHEL 9 Password Complexity Requirements`
+    description `Ensures password complexity meets STIG requirements`
+    tags `stig,password,authentication,rhel9`
 META_END
 ```
 
@@ -1657,11 +1224,12 @@ You now have the knowledge to:
 
 - Write basic and advanced ESP policies
 - Use variables, logic operators, and sets
-- Implement STIG and CIS compliance checks
+- Implement compliance checks using various CTN types
 - Debug and troubleshoot policy issues
 
 **Resources:**
 
+- [CTN Type Documentation](../contract_kit/docs/) — Complete field specifications for each CTN type
 - [EBNF Grammar](EBNF.md) — Formal language specification
-- [ESP Trust Model](ESP_Trust_Model.md) — Security boundaries
-- [Scanner Development Guide](Scanner_Development_Guide.md) — Extending ESP
+- [Scanner Development Guide](Scanner_Development_Guide.md) — Creating custom CTN types
+- [Example Policies](../esp/) — Working policy examples

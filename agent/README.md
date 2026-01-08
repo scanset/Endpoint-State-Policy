@@ -4,10 +4,10 @@ Reference CLI application for ESP (Endpoint State Policy) compliance scanning.
 
 ## Overview
 
-The Agent (`agent`) is a working example of how to build a scanner using `contract_kit` and `agent_core`. It demonstrates:
+The Agent (`agent`) is a working example of how to build a scanner using `contract_kit` and `execution_engine`. It demonstrates:
 
 - Building a `CtnStrategyRegistry` with collectors and executors
-- Using `agent_core_api` to scan ESP files
+- Using `execution_api` to scan ESP files
 - Handling single file and batch directory scanning
 - Producing JSON results
 
@@ -28,12 +28,12 @@ Use this crate as a template when building your own scanner.
 ┌─────────────────────────────────────────────────────────────┐
 │                     contract_kit                            │
 │  • collectors, executors, contracts                         │
-│  • agent_core_api (scan_file, scan_ast)                     │
+│  • execution_api (scan_file, scan_ast)                     │
 └─────────────────────────────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                      agent_core                             │
+│                      execution_engine                             │
 │  • Resolution, Execution, Strategy framework                │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -107,7 +107,7 @@ The key components are:
 The registry maps CTN types to collector/executor pairs:
 
 ```rust
-use contract_kit::agent_core_api::strategies::{CtnStrategyRegistry, StrategyError};
+use contract_kit::execution_api::strategies::{CtnStrategyRegistry, StrategyError};
 use contract_kit::{collectors, contracts, executors, commands};
 
 pub fn create_scanner_registry() -> Result<CtnStrategyRegistry, StrategyError> {
@@ -141,10 +141,10 @@ pub fn create_scanner_registry() -> Result<CtnStrategyRegistry, StrategyError> {
 
 ### 2. Scanning (`main.rs`)
 
-Use `agent_core_api` to execute scans:
+Use `execution_api` to execute scans:
 
 ```rust
-use contract_kit::agent_core_api::{
+use contract_kit::execution_api::{
     scan_file_with_logging,
     format_report,
     logging,
@@ -201,7 +201,7 @@ path = "src/main.rs"
 ### Registry Creation
 
 ```rust
-use contract_kit::agent_core_api::strategies::CtnStrategyRegistry;
+use contract_kit::execution_api::strategies::CtnStrategyRegistry;
 
 let mut registry = CtnStrategyRegistry::new();
 
@@ -219,7 +219,7 @@ println!("CTN types: {}", stats.total_ctn_types);
 ### Scanning
 
 ```rust
-use contract_kit::agent_core_api::{
+use contract_kit::execution_api::{
     scan_file,              // Basic scan
     scan_file_with_logging, // With progress logging
     scan_ast,               // Pre-compiled AST
@@ -239,7 +239,7 @@ let result = scan_ast(&ast, registry.clone())?;
 ### Result Handling
 
 ```rust
-use contract_kit::agent_core_api::{
+use contract_kit::execution_api::{
     is_compliant,
     pass_rate,
     format_summary,
@@ -267,7 +267,7 @@ println!("Findings: {}", result.findings.len());
 ### File Context (for batch processing)
 
 ```rust
-use contract_kit::agent_core_api::logging;
+use contract_kit::execution_api::logging;
 
 // Set context for error reporting
 logging::set_file_context(file_path.to_path_buf(), file_id);
@@ -304,7 +304,7 @@ See `registry.rs` for the complete setup.
 ## Related Documentation
 
 - [contract_kit](../contract_kit/README.md) - Collectors, executors, contracts
-- [agent_core](../agent_core/README.md) - Core execution framework
+- [execution_engine](../execution_engine/README.md) - Core execution framework
 - [common](../common/README.md) - Shared types and logging
 - [Scanner Development Guide](../contract_kit/Scanner_Development_Guide.md) - Adding CTN types
 

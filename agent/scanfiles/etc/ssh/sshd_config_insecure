@@ -1,7 +1,0 @@
-# Insecure SSH Configuration
-Port 22
-PermitRootLogin yes
-PasswordAuthentication yes
-PermitEmptyPasswords yes
-X11Forwarding yes
-MaxAuthTries 10

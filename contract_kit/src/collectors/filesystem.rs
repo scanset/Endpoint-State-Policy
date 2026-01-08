@@ -1,12 +1,12 @@
 //! # File System Data Collector
 //!
 //! Collects file metadata (permissions, owner, group) and content for validation.
-use agent_core::execution::BehaviorHints;
-use agent_core::strategies::{
+use execution_engine::execution::BehaviorHints;
+use execution_engine::strategies::{
     CollectedData, CollectionError, CollectionMode, CtnContract, CtnDataCollector,
 };
-use agent_core::types::common::{RecordData, ResolvedValue};
-use agent_core::types::execution_context::{ExecutableObject, ExecutableObjectElement};
+use execution_engine::types::common::{RecordData, ResolvedValue};
+use execution_engine::types::execution_context::{ExecutableObject, ExecutableObjectElement};
 use std::fs;
 use std::path::Path;
 

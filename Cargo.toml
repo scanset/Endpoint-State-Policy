@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["common", "compiler", "agent_core", "contract_kit", "agent"]
+members = ["common", "compiler", "execution_engine", "contract_kit", "agent"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Curtis Slone <curtis@scanset.io>"]
 license = "MIT OR Apache-2.0"
@@ -21,7 +21,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # Workspace-internal dependencies
 common = { path = "common" }
 compiler = { path = "compiler" }
-agent_core = { path = "agent_core" }
+execution_engine = { path = "execution_engine" }
 contract_kit = { path = "contract_kit" }
 
 [profile.dev]

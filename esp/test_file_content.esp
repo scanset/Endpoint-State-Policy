@@ -1,0 +1,86 @@
+# File Content Validation Test
+# Tests file content using contains, pattern_match, and other string operations
+
+META
+    esp_scan_id `test-file-content-001`
+    platform `linux`
+    criticality `medium`
+    control_mapping `CIS:5.4.1,NIST-800-53:AC-2`
+    title `System Account Configuration Validation`
+    description `Validates critical system file content for security compliance`
+    version `1.0.0`
+    author `security-team`
+    tags `file-content,linux,accounts`
+META_END
+
+DEF
+    # ==========================================================================
+    # Objects - Files to examine
+    # ==========================================================================
+    OBJECT passwd_file
+        path `/etc/passwd`
+    OBJECT_END
+
+    OBJECT group_file
+        path `/etc/group`
+    OBJECT_END
+
+    # ==========================================================================
+    # States - Content validation rules
+    # ==========================================================================
+
+    # Verify root account has UID 0 and valid shell
+    STATE root_account_valid
+        content string contains `root:x:0:0:`
+        content string pattern_match `^root:.*:/bin/bash$`
+    STATE_END
+
+    # Verify system accounts use nologin shell
+    STATE daemon_nologin
+        content string contains `daemon:x:1:1:`
+        content string contains `/usr/sbin/nologin`
+    STATE_END
+
+    # Verify shadow group exists
+    STATE shadow_group_exists
+        content string contains `shadow:x:`
+    STATE_END
+
+    # Verify no accounts have empty password field (x should be present)
+    STATE no_empty_passwords
+        content string not_contains `::0:`
+    STATE_END
+
+    # ==========================================================================
+    # Criteria
+    # ==========================================================================
+    CRI AND
+        # Root account configuration
+        CTN file_content
+            TEST all all
+            STATE_REF root_account_valid
+            OBJECT_REF passwd_file
+        CTN_END
+
+        # System account security
+        CTN file_content
+            TEST all all
+            STATE_REF daemon_nologin
+            OBJECT_REF passwd_file
+        CTN_END
+
+        # Password security
+        CTN file_content
+            TEST all all
+            STATE_REF no_empty_passwords
+            OBJECT_REF passwd_file
+        CTN_END
+
+        # Group file validation
+        CTN file_content
+            TEST all all
+            STATE_REF shadow_group_exists
+            OBJECT_REF group_file
+        CTN_END
+    CRI_END
+DEF_END

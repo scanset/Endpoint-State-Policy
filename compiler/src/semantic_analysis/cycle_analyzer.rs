@@ -34,7 +34,10 @@ pub fn analyze_dependency_cycles(
 
         // SECURITY: Limit cycle path length to prevent DoS via deep cycle reporting
         let limited_cycle: Vec<String> = if cycle.len() > MAX_CYCLE_PATH_LENGTH {
-            let mut truncated = cycle[..MAX_CYCLE_PATH_LENGTH].to_vec();
+            let mut truncated = cycle
+                .get(..MAX_CYCLE_PATH_LENGTH)
+                .map(|s| s.to_vec())
+                .unwrap_or_else(|| cycle.to_vec());
             truncated.push("... [truncated for security]".to_string());
 
             log_info!("Cycle path truncated due to security limit",

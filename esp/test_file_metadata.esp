@@ -1,0 +1,92 @@
+# File Metadata Validation Test
+# Tests file permissions, ownership, and existence
+
+META
+    esp_scan_id `test-file-metadata-001`
+    platform `linux`
+    criticality `high`
+    control_mapping `CIS:6.1.1,CIS:6.1.2,NIST-800-53:AC-6`
+    title `Critical System File Permissions`
+    description `Validates that critical system files have correct permissions and ownership`
+    version `1.0.0`
+    author `security-team`
+    tags `file-permissions,linux,hardening`
+META_END
+
+DEF
+    # ==========================================================================
+    # Variables
+    # ==========================================================================
+    VAR root_uid string `0`
+    VAR root_gid string `0`
+    VAR shadow_gid string `42`
+
+    # ==========================================================================
+    # Objects - System files to check
+    # ==========================================================================
+    OBJECT passwd_file
+        path `/etc/passwd`
+    OBJECT_END
+
+    OBJECT group_file
+        path `/etc/group`
+    OBJECT_END
+
+    OBJECT shadow_file
+        path `/etc/shadow`
+    OBJECT_END
+
+    # ==========================================================================
+    # States - Expected conditions
+    # ==========================================================================
+
+    # /etc/passwd should be 0644, owned by root:root
+    STATE passwd_permissions
+        exists boolean = true
+        permissions string = `0644`
+        owner string = VAR root_uid
+        group string = VAR root_gid
+    STATE_END
+
+    # /etc/group should be 0644, owned by root:root
+    STATE group_permissions
+        exists boolean = true
+        permissions string = `0644`
+        owner string = VAR root_uid
+        group string = VAR root_gid
+    STATE_END
+
+    # /etc/shadow should be 0640, owned by root:shadow
+    STATE shadow_permissions
+        exists boolean = true
+        permissions string = `0640`
+        owner string = VAR root_uid
+        group string = VAR shadow_gid
+    STATE_END
+
+    # ==========================================================================
+    # Criteria - All checks must pass
+    # ==========================================================================
+    CRI AND
+        # Check /etc/passwd permissions
+        CTN file_metadata
+            TEST all all
+            STATE_REF passwd_permissions
+            OBJECT_REF passwd_file
+        CTN_END
+
+        # Check /etc/group permissions
+        CTN file_metadata
+            TEST all all
+            STATE_REF group_permissions
+            OBJECT_REF group_file
+        CTN_END
+
+        # Check /etc/shadow permissions
+        CTN file_metadata
+            TEST all all
+            STATE_REF shadow_permissions
+            OBJECT_REF shadow_file
+        CTN_END
+    CRI_END
+DEF_END

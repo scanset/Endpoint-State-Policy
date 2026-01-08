@@ -5,12 +5,12 @@
 //! - Systemd service status
 //! - Sysctl kernel parameters
 //! - SELinux enforcement mode
-use agent_core::execution::BehaviorHints;
-use agent_core::strategies::{
+use execution_engine::execution::BehaviorHints;
+use execution_engine::strategies::{
     CollectedData, CollectionError, CtnContract, CtnDataCollector, SystemCommandExecutor,
 };
-use agent_core::types::common::ResolvedValue;
-use agent_core::types::execution_context::{ExecutableObject, ExecutableObjectElement};
+use execution_engine::types::common::ResolvedValue;
+use execution_engine::types::execution_context::{ExecutableObject, ExecutableObjectElement};
 use std::collections::HashMap;
 
 /// Collector that executes system commands to gather compliance data
@@ -41,10 +41,12 @@ impl CommandCollector {
         // Example: "openssl-3.0.7-27.el9.x86_64" -> ("openssl", "3.0.7-27.el9")
         let parts: Vec<&str> = line.rsplitn(2, '-').collect();
         if parts.len() == 2 {
-            let version_release = parts[0];
-            let name_arch: Vec<&str> = parts[1].rsplitn(2, '-').collect();
+            let version_release = parts.first()?;
+            let name_part = parts.get(1)?;
+            let name_arch: Vec<&str> = name_part.rsplitn(2, '-').collect();
             if name_arch.len() == 2 {
-                return Some((name_arch[1].to_string(), version_release.to_string()));
+                let name = name_arch.get(1)?;
+                return Some((name.to_string(), version_release.to_string()));
             }
         }
 
@@ -307,16 +309,15 @@ impl CtnDataCollector for CommandCollector {
         objects: Vec<&ExecutableObject>,
         contract: &CtnContract,
     ) -> Result<HashMap<String, CollectedData>, CollectionError> {
-        use agent_core::execution::extract_behavior_hints;
+        use execution_engine::execution::extract_behavior_hints;
 
         match contract.ctn_type.as_str() {
             "rpm_package" => {
                 // Extract hints from first object (batch operations use same hints)
-                let hints = if !objects.is_empty() {
-                    extract_behavior_hints(objects[0])
-                } else {
-                    BehaviorHints::empty()
-                };
+                let hints = objects
+                    .first()
+                    .map(|obj| extract_behavior_hints(obj))
+                    .unwrap_or_else(BehaviorHints::empty);
 
                 // Check for timeout behavior
                 let timeout = hints

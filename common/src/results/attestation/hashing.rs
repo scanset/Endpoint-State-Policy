@@ -16,6 +16,7 @@ pub use super::super::crypto::{
     hash_content, hex_decode, hex_encode, sha256_hash, to_canonical_json, verify_hash, HashingError,
 };
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

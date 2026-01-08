@@ -1,6 +1,0 @@
-# Sudoers file
-Defaults    logfile=/var/log/sudo.log
-Defaults    log_input, log_output
-Defaults    requiretty
-root    ALL=(ALL:ALL) ALL
-%sudo   ALL=(ALL:ALL) ALL

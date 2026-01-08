@@ -2,12 +2,12 @@
 //!
 //! Collects Kubernetes resources via kubectl and returns as RecordData.
 
-use agent_core::execution::BehaviorHints;
-use agent_core::strategies::{
+use execution_engine::execution::BehaviorHints;
+use execution_engine::strategies::{
     CollectedData, CollectionError, CtnContract, CtnDataCollector, SystemCommandExecutor,
 };
-use agent_core::types::common::{RecordData, ResolvedValue};
-use agent_core::types::execution_context::{ExecutableObject, ExecutableObjectElement};
+use execution_engine::types::common::{RecordData, ResolvedValue};
+use execution_engine::types::execution_context::{ExecutableObject, ExecutableObjectElement};
 use std::time::Duration;
 
 /// Collector for Kubernetes resources via kubectl

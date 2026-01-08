@@ -398,8 +398,8 @@ impl RuntimeOperationValidator {
         span: Span,
     ) -> Result<(), SemanticError> {
         // String operations require first parameter to be string
-        if !parameter_analysis.is_empty() {
-            if let Some(first_type) = parameter_analysis[0].inferred_type {
+        if let Some(first_param) = parameter_analysis.first() {
+            if let Some(first_type) = first_param.inferred_type {
                 if first_type != DataType::String {
                     return Err(SemanticError::runtime_operation_error(
                         variable_name,
@@ -425,38 +425,41 @@ impl RuntimeOperationValidator {
     ) -> Result<(), SemanticError> {
         // REGEX_CAPTURE requires string input and pattern
         if parameter_analysis.len() >= 2 {
-            if let Some(input_type) = parameter_analysis[0].inferred_type {
-                if input_type != DataType::String {
-                    return Err(SemanticError::runtime_operation_error(
-                        variable_name,
-                        RuntimeOperationType::RegexCapture,
-                        &format!(
-                            "REGEX_CAPTURE requires string input, found {}",
-                            input_type.as_str()
-                        ),
-                        span,
-                    ));
+            if let Some(first_param) = parameter_analysis.first() {
+                if let Some(input_type) = first_param.inferred_type {
+                    if input_type != DataType::String {
+                        return Err(SemanticError::runtime_operation_error(
+                            variable_name,
+                            RuntimeOperationType::RegexCapture,
+                            &format!(
+                                "REGEX_CAPTURE requires string input, found {}",
+                                input_type.as_str()
+                            ),
+                            span,
+                        ));
+                    }
                 }
             }
 
             // Pattern parameter should be string
-            if let Some(pattern_type) = parameter_analysis[1].inferred_type {
-                if pattern_type != DataType::String {
-                    return Err(SemanticError::runtime_operation_error(
-                        variable_name,
-                        RuntimeOperationType::RegexCapture,
-                        &format!(
-                            "REGEX_CAPTURE requires string pattern, found {}",
-                            pattern_type.as_str()
-                        ),
-                        span,
-                    ));
+            if let Some(second_param) = parameter_analysis.get(1) {
+                if let Some(pattern_type) = second_param.inferred_type {
+                    if pattern_type != DataType::String {
+                        return Err(SemanticError::runtime_operation_error(
+                            variable_name,
+                            RuntimeOperationType::RegexCapture,
+                            &format!(
+                                "REGEX_CAPTURE requires string pattern, found {}",
+                                pattern_type.as_str()
+                            ),
+                            span,
+                        ));
+                    }
                 }
             }
         }
         Ok(())
     }
-
     fn validate_arithmetic_constraints(
         &self,
         variable_name: &str,
@@ -509,11 +512,17 @@ impl RuntimeOperationValidator {
         }
 
         // Check that all parameters have compatible types
-        if let Some(first_type) = parameter_analysis[0].inferred_type {
-            for (index, param_info) in parameter_analysis[1..].iter().enumerate() {
-                if let Some(param_type) = param_info.inferred_type {
-                    if param_type != first_type {
-                        return Err(SemanticError::runtime_operation_error(
+        if let Some(first_param) = parameter_analysis.first() {
+            if let Some(first_type) = first_param.inferred_type {
+                for (index, param_info) in parameter_analysis
+                    .get(1..)
+                    .unwrap_or(&[])
+                    .iter()
+                    .enumerate()
+                {
+                    if let Some(param_type) = param_info.inferred_type {
+                        if param_type != first_type {
+                            return Err(SemanticError::runtime_operation_error(
                             variable_name,
                             RuntimeOperationType::Merge,
                             &format!(
@@ -524,6 +533,7 @@ impl RuntimeOperationValidator {
                             ),
                             span,
                         ));
+                        }
                     }
                 }
             }

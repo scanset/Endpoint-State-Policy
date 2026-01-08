@@ -2,16 +2,16 @@
 //!
 //! Validates file content with string operations (contains, starts, ends, pattern_match).
 
-use agent_core::execution::{
+use common::results::Outcome;
+use execution_engine::execution::{
     comparisons::string, evaluate_existence_check, evaluate_item_check, evaluate_state_operator,
 };
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CollectedData, CtnContract, CtnExecutionError, CtnExecutionResult, CtnExecutor,
     FieldValidationResult, StateValidationResult, TestPhase,
 };
-use agent_core::types::common::{Operation, ResolvedValue};
-use agent_core::types::execution_context::ExecutableCriterion;
-use common::results::Outcome;
+use execution_engine::types::common::{Operation, ResolvedValue};
+use execution_engine::types::execution_context::ExecutableCriterion;
 use std::collections::HashMap;
 
 /// Executor for file_content validation
@@ -51,7 +51,7 @@ impl CtnExecutor for FileContentExecutor {
     fn execute_with_contract(
         &self,
         criterion: &ExecutableCriterion,
-        collected_data: &HashMap<String, CollectedData>,
+        collected_data: HashMap<String, CollectedData>,
         _contract: &CtnContract,
     ) -> Result<CtnExecutionResult, CtnExecutionError> {
         let test_spec = &criterion.test;
@@ -70,14 +70,15 @@ impl CtnExecutor for FileContentExecutor {
                     "Existence check failed: expected {} objects, found {}",
                     objects_expected, objects_found
                 ),
-            ));
+            )
+            .with_collected_data(collected_data));
         }
 
         // Phase 2: State Validation
         let mut state_results = Vec::new();
         let mut failure_messages = Vec::new();
 
-        for (object_id, data) in collected_data {
+        for (object_id, data) in &collected_data {
             // Get file content
             let content = match data.get_field("file_content") {
                 Some(ResolvedValue::String(c)) => c.clone(),
@@ -256,6 +257,7 @@ impl CtnExecutor for FileContentExecutor {
                 }
             }),
             execution_metadata: Default::default(),
+            collected_data,
         })
     }
 

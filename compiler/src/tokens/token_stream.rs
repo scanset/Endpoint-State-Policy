@@ -184,7 +184,7 @@ impl TokenStream {
             self.significant_indices.get(start_pos),
             self.significant_indices.get(end_pos),
         ) {
-            &self.all_tokens[start_idx..=end_idx]
+            self.all_tokens.get(start_idx..=end_idx).unwrap_or(&[])
         } else {
             &[]
         }
@@ -298,7 +298,7 @@ impl TokenStream {
     pub fn iter_significant(&self) -> impl Iterator<Item = &SpannedToken> {
         self.significant_indices
             .iter()
-            .map(|&i| &self.all_tokens[i])
+            .filter_map(|&i| self.all_tokens.get(i))
     }
 
     /// Get all tokens (including non-significant) with spans
@@ -308,9 +308,11 @@ impl TokenStream {
 
     /// Get remaining significant tokens
     pub fn remaining_tokens(&self) -> impl Iterator<Item = &SpannedToken> {
-        self.significant_indices[self.position..]
+        self.significant_indices
+            .get(self.position..)
+            .unwrap_or(&[])
             .iter()
-            .map(|&i| &self.all_tokens[i])
+            .filter_map(|&i| self.all_tokens.get(i))
     }
 
     // === DEBUGGING AND DIAGNOSTICS ===
@@ -513,8 +515,14 @@ pub mod validation {
     /// Validate that spans are monotonically increasing
     pub fn validate_span_order(tokens: &[SpannedToken]) -> Result<(), String> {
         for window in tokens.windows(2) {
-            let current = window[0].span;
-            let next = window[1].span;
+            let Some(current_token) = window.first() else {
+                continue;
+            };
+            let Some(next_token) = window.get(1) else {
+                continue;
+            };
+            let current = current_token.span;
+            let next = next_token.span;
 
             if current.end.offset > next.start.offset {
                 return Err(format!(

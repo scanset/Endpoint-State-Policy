@@ -5,16 +5,16 @@
 //!
 //! CURRENT STATUS: STUB - Needs ExecutionContext access to complete
 
-use agent_core::execution::{
+use common::results::Outcome;
+use execution_engine::execution::{
     evaluate_existence_check, evaluate_item_check, evaluate_state_operator,
 };
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CollectedData, CtnContract, CtnExecutionError, CtnExecutionResult, CtnExecutor,
     FieldValidationResult, StateValidationResult, TestPhase,
 };
-use agent_core::types::common::ResolvedValue;
-use agent_core::types::execution_context::ExecutableCriterion;
-use common::results::Outcome;
+use execution_engine::types::common::ResolvedValue;
+use execution_engine::types::execution_context::ExecutableCriterion;
 use std::collections::HashMap;
 pub struct ComputedValuesExecutor {
     contract: CtnContract,
@@ -30,7 +30,7 @@ impl CtnExecutor for ComputedValuesExecutor {
     fn execute_with_contract(
         &self,
         criterion: &ExecutableCriterion,
-        _collected_data: &HashMap<String, CollectedData>,
+        collected_data: HashMap<String, CollectedData>,
         _contract: &CtnContract,
     ) -> Result<CtnExecutionResult, CtnExecutionError> {
         let test_spec = &criterion.test;
@@ -49,7 +49,8 @@ impl CtnExecutor for ComputedValuesExecutor {
                     "Existence check failed: expected {} objects, found {}",
                     objects_expected, objects_found
                 ),
-            ));
+            )
+            .with_collected_data(collected_data));
         }
 
         // Phase 2: State Validation (STUB)
@@ -119,6 +120,7 @@ impl CtnExecutor for ComputedValuesExecutor {
                 "see": "COMPUTED_VALUES_IMPLEMENTATION.md"
             }),
             execution_metadata: Default::default(),
+            collected_data,
         })
     }
 

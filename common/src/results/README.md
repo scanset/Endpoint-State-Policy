@@ -1,101 +1,228 @@
-# Results Module
+# Common Crate
 
-Structured types for ESP compliance scan results with feature-gated output modes.
+Shared types and utilities for the ESP (Endpoint State Policy) compiler and scanner ecosystem.
 
-This module provides two output formats: **attestations** for secure network transport, and **full results** for local storage with complete evidence. Choose the appropriate mode based on your security and data requirements.
+This crate provides foundational types used across the ESP toolchain: AST nodes, source location tracking, logging infrastructure, configuration management, result types, metadata handling, and FIPS 140-3 compliant cryptography.
 
-## Security Model
+## Overview
 
-ESP scan results can contain sensitive information about system configurations, architecture internals, and security posture. This module separates results into two categories:
-
-### Attestations (default)
-
-Network-safe output containing only pass/fail metadata:
-
-- Policy identifiers and outcomes
-- Criticality levels and compliance framework mappings
-- Aggregate statistics (criteria counts, pass rates)
-- Content hashing for integrity verification
-
-**Does not include**: Actual system values, expected configurations, file contents, command outputs, or any data that could expose system internals.
-
-### Full Results
-
-Complete results with evidence for local storage:
-
-- Everything in attestations, plus:
-- Expected values (what the policy requires)
-- Actual values (what was found on the system)
-- Raw collected data and findings
-
-**Warning**: Full results contain sensitive system configuration data. Store locally only—do not transmit over untrusted networks.
-
-## Cryptographic Hashing
-
-The `crypto` module provides **FIPS 140-3 compliant** hashing using platform-native cryptography:
-
-| Platform | Backend | Certification |
-|----------|---------|---------------|
-| **Windows** | Windows CNG (BCrypt) | FIPS 140-3 certified (built into Windows 10/11/Server 2016+) |
-| **Linux/Unix** | OpenSSL FIPS provider | FIPS 140-3 certified |
-
-### Usage
-
-```rust
-use common::results::crypto::{hash_content, sha256_hash, verify_hash};
-
-// Hash serializable content (canonical JSON + SHA-256)
-let hash = hash_content(&my_struct)?;
-
-// Hash raw bytes
-let digest = sha256_hash(b"hello world")?;
-
-// Verify content against hash
-let valid = verify_hash(&my_struct, &expected_hash)?;
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         common                                   │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌──────────┐           │
+│  │   ast   │  │  utils  │  │ logging │  │  config  │           │
+│  │         │  │         │  │         │  │          │           │
+│  │ EspFile │  │ Position│  │ LogEvent│  │ compile_ │           │
+│  │ State   │  │ Span    │  │ Code    │  │ time     │           │
+│  │ Object  │  │ Spanned │  │ macros  │  │ runtime  │           │
+│  │ Criteria│  │ SourceMap│ │ Collector│ │          │           │
+│  └─────────┘  └─────────┘  └─────────┘  └──────────┘           │
+│                                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                       │
+│  │ results  │  │ metadata │  │  crypto  │                       │
+│  │          │  │          │  │          │                       │
+│  │Attestation│ │MetaData  │  │ SHA-256  │                       │
+│  │FullResult│  │Block     │  │ FIPS 140 │                       │
+│  │ Envelope │  │          │  │          │                       │
+│  └──────────┘  └──────────┘  └──────────┘                       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Cross-Platform Builds
-
-The crypto module automatically selects the appropriate backend at compile time:
-
-- **Windows target**: Uses `windows` crate with BCrypt APIs (no external dependencies)
-- **Non-Windows target**: Uses `openssl` crate
-
-This enables cross-compilation without bundling OpenSSL for Windows builds.
-
-## Feature Flags
-
-Enable the output mode you need in your `Cargo.toml`:
+## Installation
 
 ```toml
-# Attestations only (default)
+[dependencies]
 common = { path = "../common" }
 
-# Full results only
-common = { path = "../common", default-features = false, features = ["full-results"] }
-
-# Both modes
+# With full results support
 common = { path = "../common", features = ["full-results"] }
 ```
 
-Note: The `crypto` module is always available regardless of feature flags.
+---
 
-## Common Types
+## Modules
 
-These types are always available regardless of feature flags:
+### ast
+
+Abstract Syntax Tree types corresponding to the ESP EBNF grammar.
+
+```rust
+use common::ast::{EspFile, StateDefinition, ObjectDefinition, CriteriaNode};
+
+let file: EspFile = parse(source)?;
+
+for state in &file.definition.states {
+    println!("State: {}", state.id);
+}
+```
+
+Key types: `EspFile`, `DefinitionNode`, `StateDefinition`, `ObjectDefinition`, `CriteriaNode`, `CriterionNode`, `DataType`, `Operation`, `Value`
+
+---
+
+### utils
+
+Source location tracking for error reporting.
+
+```rust
+use common::{Position, Span, SourceMap};
+
+let pos = Position::new(42, 3, 10);  // offset, line, column
+let span = Span::new(start_pos, end_pos);
+let map = SourceMap::new(source);
+println!("{}", map.format_error(&span, "syntax error"));
+```
+
+Key types: `Position`, `Span`, `Spanned<T>`, `SourceMap`
+
+---
+
+### logging
+
+Thread-safe global logging with cargo-style error reporting.
+
+```rust
+use common::{log_error, log_info, log_success};
+use common::logging::{self, codes};
+
+logging::init_global_logging()?;
+
+log_error!(codes::lexical::INVALID_CHARACTER, "Unexpected character",
+    "char" => '€',
+    "line" => 42
+);
+
+logging::print_cargo_style_summary();
+```
+
+Key types: `LogEvent`, `Code`, `ErrorCollector`, `LoggingService`
+
+---
+
+### config
+
+Compile-time security constants and runtime preferences.
+
+```rust
+use common::config::{compile_time, runtime::RuntimeConfig};
+
+if tokens.len() > compile_time::lexical::MAX_TOKEN_COUNT {
+    return Err("Too many tokens");
+}
+
+let config = RuntimeConfig::default();
+```
+
+Key types: `compile_time::*` constants, `RuntimeConfig`, `LoggingPreferences`
+
+---
+
+### metadata
+
+Metadata block handling for ESP policies.
+
+```rust
+use common::metadata::MetaDataBlock;
+
+let meta = MetaDataBlock::from_fields(fields);
+println!("Policy: {}", meta.policy_id().unwrap());
+println!("Platform: {}", meta.platform().unwrap());
+
+for field in meta.missing_required_fields() {
+    eprintln!("Missing: {}", field);
+}
+```
+
+Required META fields for attestations:
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `esp_scan_id` | Unique policy identifier | `tcp-ports-check` |
+| `platform` | Target platform | `linux`, `kubernetes` |
+| `criticality` | Severity level | `critical`, `high`, `medium`, `low`, `info` |
+| `control_mapping` | Framework mappings | `CIS:2.1,NIST-800-53:CM-7` |
+
+---
+
+### results
+
+Feature-gated scan result types for secure output handling.
+
+#### Security Model
+
+| Mode | Contains CUI | Network Safe | Use Case |
+|------|--------------|--------------|----------|
+| Attestations | No | Yes | Transport to compliance servers |
+| Full Results | Yes | No | Local audit trails, debugging |
+
+#### Common Types (always available)
 
 | Type | Description |
 |------|-------------|
-| `Outcome` | Evaluation result: `Pass`, `Fail`, `Error`, `Unknown` |
-| `Criticality` | Severity level: `Critical`, `High`, `Medium`, `Low`, `Info` |
-| `Weight` | Posture scoring weight (0.0 - 1.0), derived from criticality or explicit |
-| `CriteriaCounts` | Pass/fail/error statistics for criteria within a policy |
-| `ControlMapping` | Compliance framework reference (e.g., `NIST-800-53:AC-6`) |
-| `PolicyOutcome` | Core policy evaluation data shared between both output modes |
+| `Outcome` | `Pass`, `Fail`, `Error`, `Unknown` |
+| `Criticality` | `Critical`, `High`, `Medium`, `Low`, `Info` |
+| `Weight` | Posture scoring weight (0.0 - 1.0) |
+| `CriteriaCounts` | Pass/fail/error counts |
+| `ControlMapping` | Framework reference (e.g., `NIST-800-53:AC-6`) |
+| `PolicyOutcome` | Core policy evaluation data |
+| `ExecutionEnvelope` | Wrapper with agent/host/timestamp metadata |
+| `ExecutionSummary` | Aggregate statistics with posture score |
+| `Evidence` | Raw collected data container |
+| `PolicyIdentity` | CUI-free policy identification |
 
-### Criticality Weights
+#### Envelope Types
 
-Default weights used for posture score calculations:
+The `ExecutionEnvelope` provides metadata about WHO ran WHAT, WHERE, and WHEN:
+
+```rust
+use common::results::{ExecutionEnvelope, AgentInfo, HostInfo};
+
+let agent = AgentInfo::new("agent-001", "esp-scanner", "0.1.0", "cli");
+let host = HostInfo::from_system();  // Auto-detects hostname, OS, arch
+
+let envelope = ExecutionEnvelope::new("result-123", agent, host)
+    .with_content_hash("sha256:abc123...");
+```
+
+**HostInfo fields:**
+- `hostname` - System hostname
+- `os` - Operating system
+- `arch` - CPU architecture
+- `fqdn` - Fully qualified domain name (optional)
+- `asset_id` - CMDB asset identifier (optional)
+
+**AgentInfo fields:**
+- `id` - Agent instance identifier
+- `name` - Agent name
+- `version` - Agent version
+- `agent_type` - Type: `cli`, `daemon`, `controller`
+
+#### Attestations (default feature)
+
+```rust
+use common::results::{AttestationBuilder, Outcome, CriteriaCounts};
+
+let mut builder = AttestationBuilder::new("agent-001", "controller");
+builder.add_check(&metadata, Outcome::Pass, counts)?;
+let attestation = builder.build()?;
+let json = attestation.to_json()?;
+```
+
+#### Full Results (opt-in feature)
+
+```rust
+use common::results::full::{FullResultBuilder, HostContext, UserContext};
+
+let host = HostContext::from_system();
+let user = UserContext::from_environment();
+let mut builder = FullResultBuilder::new("scan-001", host, user);
+
+builder.add_policy(&metadata, outcome, counts, findings, evidence)?;
+let result = builder.build();
+```
+
+#### Criticality Weights
 
 | Criticality | Default Weight |
 |-------------|----------------|
@@ -105,185 +232,113 @@ Default weights used for posture score calculations:
 | Low | 0.2 |
 | Info | 0.1 |
 
-## Usage: Attestations
+---
 
-### Required META Fields
+### results::crypto
 
-The attestation builder requires these fields in the policy's META block:
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `esp_scan_id` | Unique policy identifier | `tcp-dangerous-ports-closed` |
-| `platform` | Target platform | `linux`, `Kubernetes` |
-| `criticality` | Severity level | `critical`, `high`, `medium`, `low`, `info` |
-| `control_mapping` | Framework:ControlID pairs | `CIS:2.1,NIST-800-53:CM-7` |
-
-Optional fields:
-- `esp_version` - Policy version
-- `weight` - Explicit weight override (0.0 - 1.0)
-
-### Building Attestations
+**FIPS 140-3 compliant** cryptographic hashing with platform-native backends.
 
 ```rust
-use common::results::{AttestationBuilder, Outcome, CriteriaCounts};
-use common::metadata::MetaDataBlock;
+use common::results::{hash_content, sha256_hash, verify_hash};
 
-// After executing policies, build the attestation
-let mut builder = AttestationBuilder::new("agent-001", "controller");
+// Hash serializable content (canonical JSON + SHA-256)
+let hash = hash_content(&my_struct)?;
 
-for (metadata, outcome, counts) in policy_results {
-    builder.add_check(&metadata, outcome, counts)?;
-}
+// Hash raw bytes
+let digest = sha256_hash(b"hello world")?;
 
-let attestation = builder.build()?;
-
-// Serialize for transport
-let json = attestation.to_json()?;
+// Verify content against expected hash
+let valid = verify_hash(&my_struct, &expected_hash)?;
 ```
 
-### Example Output
+| Platform | Backend | Notes |
+|----------|---------|-------|
+| Windows | CNG (BCrypt) | Built into Windows 10/11/Server 2016+ |
+| Linux/Unix | OpenSSL | Requires FIPS-validated installation |
 
-```json
-{
-  "envelope": {
-    "attestation_id": "att-1a2b3c4d",
-    "timestamp": "2024-01-15T10:30:00Z",
-    "agent_id": "agent-001",
-    "agent_type": "controller",
-    "content_hash": "a1b2c3d4e5f6..."
-  },
-  "summary": {
-    "total_checks": 1,
-    "passed": 1,
-    "failed": 0,
-    "error": 0,
-    "total_weight": 0.8,
-    "passed_weight": 0.8
-  },
-  "checks": [
-    {
-      "policy_id": "tcp-dangerous-ports-closed",
-      "platform": "linux",
-      "outcome": "pass",
-      "criticality": "high",
-      "weight": 0.8,
-      "control_mappings": [
-        { "framework": "CIS", "control_id": "2.1" }
-      ],
-      "criteria_counts": {
-        "total": 3,
-        "passed": 3,
-        "failed": 0,
-        "error": 0
-      }
-    }
-  ]
-}
+The crypto module is **always available** regardless of feature flags.
+
+---
+
+## Feature Flags
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `attestation` | ✅ | Network-safe result types |
+| `full-results` | ❌ | Complete results with evidence |
+
+```toml
+# Both modes
+common = { path = "../common", features = ["full-results"] }
 ```
 
-### Verifying Attestations
+---
 
-```rust
-use common::results::{hash_content, verify_hash};
+## Platform Support
 
-// Verify content integrity
-let is_valid = verify_hash(&attestation_content, &envelope.content_hash)?;
-```
+| Platform | Cryptography | Notes |
+|----------|--------------|-------|
+| Linux | OpenSSL | Requires OpenSSL development libraries |
+| macOS | OpenSSL | Requires OpenSSL via Homebrew |
+| Windows | CNG (BCrypt) | Built-in, no external dependencies |
 
-## Usage: Full Results
+Cross-compilation from Linux to Windows is supported without needing OpenSSL for Windows.
 
-Use full results when you need complete evidence for local audit trails, debugging, or incident response.
+---
 
-```rust
-use common::results::full::{FullResultBuilder, HostContext, UserContext};
-use common::results::{Outcome, CriteriaCounts};
-
-let host = HostContext::from_system();
-let user = UserContext::from_environment();
-
-let mut builder = FullResultBuilder::new("scan-001", host, user);
-
-for (metadata, outcome, counts, findings, evidence) in policy_results {
-    builder.add_policy(&metadata, outcome, counts, findings, evidence)?;
-}
-
-let result = builder.build();
-
-// Store locally only
-std::fs::write("scan_result.json", result.to_json()?)?;
-```
-
-Full results include `ComplianceFinding` entries with expected vs. actual values and optional `Evidence` containing raw collected data.
-
-## Control Mapping Format
-
-Control mappings link ESP policies to compliance framework controls. The META field format is:
+## Crate Structure
 
 ```
-FRAMEWORK:CONTROL_ID,FRAMEWORK:CONTROL_ID,...
+common/
+├── src/
+│   ├── lib.rs
+│   ├── ast/
+│   │   └── nodes.rs
+│   ├── utils/
+│   │   └── span.rs
+│   ├── logging/
+│   │   ├── codes.rs
+│   │   ├── events.rs
+│   │   ├── macros.rs
+│   │   ├── service.rs
+│   │   └── collector.rs
+│   ├── config/
+│   │   ├── constants.rs
+│   │   └── runtime.rs
+│   ├── results/
+│   │   ├── error.rs
+│   │   ├── envelope.rs
+│   │   ├── evidence.rs
+│   │   ├── identity.rs
+│   │   ├── summary.rs
+│   │   ├── crypto/
+│   │   │   ├── canonical.rs
+│   │   │   ├── openssl.rs
+│   │   │   └── windows.rs
+│   │   ├── common/
+│   │   │   ├── outcome.rs
+│   │   │   ├── criticality.rs
+│   │   │   ├── counts.rs
+│   │   │   ├── control.rs
+│   │   │   └── policy_outcome.rs
+│   │   ├── attestation/
+│   │   │   ├── types.rs
+│   │   │   ├── builder.rs
+│   │   │   └── hashing.rs
+│   │   └── full/
+│   │       ├── types.rs
+│   │       └── builder.rs
+│   └── metadata.rs
+└── README.md
 ```
 
-### Examples
+---
 
-```
-# Single mapping
-control_mapping `CIS:5.1.1`
+## Related Crates
 
-# Multiple mappings
-control_mapping `NIST-800-53:AC-6,CIS:5.1.1,STIG:V-242382`
-```
-
-### Supported Frameworks
-
-Any framework identifier works. Common examples:
-
-| Framework | Example Control IDs |
-|-----------|---------------------|
-| `NIST-800-53` | `AC-6`, `CM-7`, `SI-2` |
-| `CIS` | `1.1.1`, `5.2.3` |
-| `STIG` | `V-242382` |
-| `CMMC` | `AC.1.001` |
-| `PCI-DSS` | `2.2.1` |
-
-### Parsing Control Mappings
-
-```rust
-use common::results::ControlMapping;
-
-let mappings = ControlMapping::parse_from_meta("NIST-800-53:AC-6,CIS:5.1.1")?;
-
-for mapping in &mappings {
-    println!("{}: {}", mapping.framework, mapping.control_id);
-}
-
-// Convert back to META format
-let meta_string = ControlMapping::to_meta_format(&mappings);
-```
-
-## Module Structure
-
-```
-results/
-├── mod.rs              # Feature-gated re-exports
-├── error.rs            # ResultError type
-├── crypto/             # FIPS 140-3 compliant hashing (always available)
-│   ├── mod.rs          # Platform-agnostic interface
-│   ├── canonical.rs    # Canonical JSON serialization
-│   ├── openssl.rs      # Linux/Unix backend (OpenSSL)
-│   └── windows.rs      # Windows backend (CNG/BCrypt)
-├── common/             # Always available
-│   ├── outcome.rs      # Outcome enum
-│   ├── criticality.rs  # Criticality + Weight
-│   ├── counts.rs       # CriteriaCounts, ResultCounts
-│   ├── control.rs      # ControlMapping
-│   └── policy_outcome.rs
-├── attestation/        # feature = "attestation"
-│   ├── types.rs        # ScanAttestation, CheckAttestation
-│   ├── builder.rs      # AttestationBuilder
-│   ├── hashing.rs      # Re-exports from crypto
-│   └── mod.rs
-└── full/               # feature = "full-results"
-    ├── types.rs        # ScanResult, PolicyResult, Evidence
-    ├── builder.rs      # FullResultBuilder
-    └── mod.rs
-```
+| Crate | Description |
+|-------|-------------|
+| `compiler` | ESP parser that produces AST |
+| `execution_engine` | Resolution and execution framework |
+| `contract_kit` | Scanner library with collectors and executors |
+| `agent` | Reference CLI scanner |

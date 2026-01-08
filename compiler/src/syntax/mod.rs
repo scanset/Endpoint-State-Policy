@@ -199,6 +199,12 @@ pub fn test_systematic_integration() -> Result<(), String> {
     validate_grammar_integration()
 }
 
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 #[cfg(test)]
 mod tests {
     use super::*;

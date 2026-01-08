@@ -269,40 +269,56 @@ impl LogEvent {
             "severity": self.severity(),
         });
 
-        // Add error-specific metadata
+        // Add error-specific metadata using safe insertion
         if self.is_error() {
-            json["error_metadata"] = serde_json::json!({
-                "recoverable": self.is_recoverable(),
-                "requires_halt": self.requires_halt(),
-                "description": self.description(),
-                "recommended_action": self.recommended_action(),
-            });
+            if let Some(obj) = json.as_object_mut() {
+                obj.insert(
+                    "error_metadata".to_string(),
+                    serde_json::json!({
+                        "recoverable": self.is_recoverable(),
+                        "requires_halt": self.requires_halt(),
+                        "description": self.description(),
+                        "recommended_action": self.recommended_action(),
+                    }),
+                );
+            }
         }
 
-        // Add span information
+        // Add span information using safe insertion
         if let Some(span) = &self.span {
-            json["span"] = serde_json::json!({
-                "start_line": span.start().line,
-                "start_column": span.start().column,
-                "end_line": span.end().line,
-                "end_column": span.end().column,
-            });
+            if let Some(obj) = json.as_object_mut() {
+                obj.insert(
+                    "span".to_string(),
+                    serde_json::json!({
+                        "start_line": span.start().line,
+                        "start_column": span.start().column,
+                        "end_line": span.end().line,
+                        "end_column": span.end().column,
+                    }),
+                );
+            }
         }
 
-        // Add context
+        // Add context using safe insertion
         if !self.context.is_empty() {
-            json["context"] = serde_json::Value::Object(
-                self.context
-                    .iter()
-                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                    .collect(),
-            );
+            if let Some(obj) = json.as_object_mut() {
+                obj.insert(
+                    "context".to_string(),
+                    serde_json::Value::Object(
+                        self.context
+                            .iter()
+                            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                            .collect(),
+                    ),
+                );
+            }
         }
 
         serde_json::to_string(&json)
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

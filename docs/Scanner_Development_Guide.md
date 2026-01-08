@@ -14,9 +14,10 @@ A complete guide for implementing custom compliance scanners using the ESP frame
 6. [Implementing a Collector](#implementing-a-collector)
 7. [Implementing an Executor](#implementing-an-executor)
 8. [Registering Your Scanner](#registering-your-scanner)
-9. [Advanced Features](#advanced-features)
-10. [Testing](#testing)
-11. [Best Practices](#best-practices)
+9. [Command Execution](#command-execution)
+10. [Advanced Features](#advanced-features)
+11. [Testing](#testing)
+12. [Best Practices](#best-practices)
 
 ---
 
@@ -25,7 +26,7 @@ A complete guide for implementing custom compliance scanners using the ESP frame
 The ESP framework provides the infrastructure for building compliance scanners. The framework handles:
 
 - ESP parsing and validation (`compiler`)
-- Resolution and execution orchestration (`agent_core`)
+- Resolution and execution orchestration (`execution_engine`)
 - Result generation and reporting (`common/results`)
 
 **You implement:**
@@ -45,6 +46,7 @@ ESP protects against several classes of threats. Understanding these helps you w
 | Sensitive evidence leakage | Attestation mode strips CUI | Avoid over-collection, respect contract scope |
 | Non-deterministic results | Contract validation, typed values | Return consistent typed values |
 | Privilege escalation | Capability declarations | Declare `requires_elevated_privileges` accurately |
+| Environment variable leakage | Sandboxed execution | Explicitly declare required env vars |
 
 ### Result Modes and Scanner Design
 
@@ -68,11 +70,11 @@ Here's a minimal working example — a scanner that checks if a file exists:
 
 ```rust
 // contracts/hello.rs
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CtnContract, ObjectFieldSpec, StateFieldSpec,
     CollectionMode, CollectionStrategy, PerformanceHints,
 };
-use agent_core::types::common::{DataType, Operation};
+use execution_engine::types::common::{DataType, Operation};
 
 pub fn create_hello_contract() -> CtnContract {
     let mut contract = CtnContract::new("hello_file".to_string());
@@ -116,10 +118,10 @@ pub fn create_hello_contract() -> CtnContract {
 
 ```rust
 // collectors/hello.rs
-use agent_core::execution::BehaviorHints;
-use agent_core::strategies::{CollectedData, CollectionError, CtnContract, CtnDataCollector};
-use agent_core::types::common::ResolvedValue;
-use agent_core::types::execution_context::ExecutableObject;
+use execution_engine::execution::BehaviorHints;
+use execution_engine::strategies::{CollectedData, CollectionError, CtnContract, CtnDataCollector};
+use execution_engine::types::common::ResolvedValue;
+use execution_engine::types::execution_context::ExecutableObject;
 use std::path::Path;
 
 pub struct HelloCollector;
@@ -173,13 +175,13 @@ impl CtnDataCollector for HelloCollector {
 
 ```rust
 // executors/hello.rs
-use agent_core::execution::{evaluate_existence_check, evaluate_item_check, evaluate_state_operator};
-use agent_core::strategies::{
+use execution_engine::execution::{evaluate_existence_check, evaluate_item_check, evaluate_state_operator};
+use execution_engine::strategies::{
     CollectedData, CtnContract, CtnExecutionError, CtnExecutionResult, CtnExecutor,
     FieldValidationResult, StateValidationResult, TestPhase,
 };
-use agent_core::types::common::{Operation, ResolvedValue};
-use agent_core::types::execution_context::ExecutableCriterion;
+use execution_engine::types::common::{Operation, ResolvedValue};
+use execution_engine::types::execution_context::ExecutableCriterion;
 use common::results::Outcome;
 use std::collections::HashMap;
 
@@ -193,7 +195,7 @@ impl CtnExecutor for HelloExecutor {
     fn execute_with_contract(
         &self,
         criterion: &ExecutableCriterion,
-        collected_data: &HashMap<String, CollectedData>,
+        collected_data: HashMap<String, CollectedData>,
         _contract: &CtnContract,
     ) -> Result<CtnExecutionResult, CtnExecutionError> {
         let test = &criterion.test;
@@ -205,12 +207,12 @@ impl CtnExecutor for HelloExecutor {
             return Ok(CtnExecutionResult::fail(
                 "hello_file".to_string(),
                 format!("Expected {} objects, found {}", expected, found),
-            ));
+            ).with_collected_data(collected_data));
         }
 
         // State validation
         let mut state_results = Vec::new();
-        for (id, data) in collected_data {
+        for (id, data) in &collected_data {
             let actual = data.get_field("exists").cloned()
                 .unwrap_or(ResolvedValue::Boolean(false));
 
@@ -246,6 +248,7 @@ impl CtnExecutor for HelloExecutor {
             test_phase: TestPhase::Complete,
             state_results,
             message: format!("{}/{} passed", passing, collected_data.len()),
+            collected_data,
             ..Default::default()
         })
     }
@@ -287,7 +290,7 @@ let result = scan_file("policy.esp", Arc::new(registry))?;
 ┌─────────────────────────────────────────────────────────────┐
 │                      Validated AST                          │
 └────────────────────────────┬────────────────────────────────┘
-                             │ agent_core
+                             │ execution_engine
                              ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                  CtnStrategyRegistry                        │
@@ -378,7 +381,7 @@ your_scanner/
 
 ```toml
 [dependencies]
-agent_core = { path = "../agent_core" }
+execution_engine = { path = "../execution_engine" }
 compiler = { path = "../compiler" }
 common = { path = "../common" }
 serde = { version = "1.0", features = ["derive"] }
@@ -403,7 +406,7 @@ A contract defines the interface for your scanner: required fields, supported op
 ### Contract Template
 
 ```rust
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CtnContract, ObjectFieldSpec, StateFieldSpec,
     CollectionStrategy, CollectionMode, PerformanceHints,
     SupportedBehavior, BehaviorType, BehaviorParameter,
@@ -560,30 +563,6 @@ fn add_behaviors(contract: &mut CtnContract) {
         description: "Set request timeout".to_string(),
         example: "behavior timeout 60".to_string(),
     });
-
-    // Multi-parameter behavior
-    contract.add_supported_behavior(SupportedBehavior {
-        name: "retry_policy".to_string(),
-        behavior_type: BehaviorType::Parameter,
-        parameters: vec![
-            BehaviorParameter {
-                name: "max_retries".to_string(),
-                data_type: DataType::Int,
-                required: true,
-                default_value: Some("3".to_string()),
-                description: "Maximum retry attempts".to_string(),
-            },
-            BehaviorParameter {
-                name: "backoff_ms".to_string(),
-                data_type: DataType::Int,
-                required: false,
-                default_value: Some("1000".to_string()),
-                description: "Backoff delay in milliseconds".to_string(),
-            },
-        ],
-        description: "Configure retry behavior".to_string(),
-        example: "behavior retry_policy max_retries 5 backoff_ms 2000".to_string(),
-    });
 }
 ```
 
@@ -630,11 +609,11 @@ A collector gathers data from the system.
 ### Collector Template
 
 ```rust
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CtnDataCollector, CtnContract, CollectedData, CollectionError,
 };
-use agent_core::execution::BehaviorHints;
-use agent_core::types::execution_context::{ExecutableObject, ExecutableObjectElement};
+use execution_engine::execution::BehaviorHints;
+use execution_engine::types::execution_context::{ExecutableObject, ExecutableObjectElement};
 use common::ast::ResolvedValue;
 use std::collections::HashMap;
 
@@ -781,15 +760,15 @@ An executor validates collected data against STATE requirements.
 ### Executor Template
 
 ```rust
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CtnExecutor, CtnContract, CtnExecutionResult, CtnExecutionError,
     CollectedData, FieldValidationResult, StateValidationResult, TestPhase,
 };
-use agent_core::execution::{
+use execution_engine::execution::{
     evaluate_existence_check, evaluate_item_check, evaluate_state_operator,
     comparisons::string,
 };
-use agent_core::types::execution_context::ExecutableCriterion;
+use execution_engine::types::execution_context::ExecutableCriterion;
 use common::ast::{Operation, ResolvedValue};
 use common::results::Outcome;
 use std::collections::HashMap;
@@ -823,14 +802,6 @@ impl YourExecutor {
             (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::GreaterThanOrEqual) => act >= exp,
             (ResolvedValue::Integer(exp), ResolvedValue::Integer(act), Operation::LessThanOrEqual) => act <= exp,
 
-            // Float comparisons
-            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::Equals) => (act - exp).abs() < f64::EPSILON,
-            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::NotEqual) => (act - exp).abs() >= f64::EPSILON,
-            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::GreaterThan) => act > exp,
-            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::LessThan) => act < exp,
-            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::GreaterThanOrEqual) => act >= exp,
-            (ResolvedValue::Float(exp), ResolvedValue::Float(act), Operation::LessThanOrEqual) => act <= exp,
-
             // Boolean comparisons
             (ResolvedValue::Boolean(exp), ResolvedValue::Boolean(act), Operation::Equals) => act == exp,
             (ResolvedValue::Boolean(exp), ResolvedValue::Boolean(act), Operation::NotEqual) => act != exp,
@@ -845,7 +816,7 @@ impl CtnExecutor for YourExecutor {
     fn execute_with_contract(
         &self,
         criterion: &ExecutableCriterion,
-        collected_data: &HashMap<String, CollectedData>,
+        collected_data: HashMap<String, CollectedData>,
         _contract: &CtnContract,
     ) -> Result<CtnExecutionResult, CtnExecutionError> {
         let test_spec = &criterion.test;
@@ -864,13 +835,13 @@ impl CtnExecutor for YourExecutor {
             return Ok(CtnExecutionResult::fail(
                 criterion.criterion_type.clone(),
                 format!("Existence check failed: expected {}, found {}", expected, found),
-            ));
+            ).with_collected_data(collected_data));
         }
 
         // Phase 2: State validation
         let mut state_results = Vec::new();
 
-        for (object_id, data) in collected_data {
+        for (object_id, data) in &collected_data {
             let mut field_results = Vec::new();
 
             for state in &criterion.states {
@@ -927,6 +898,7 @@ impl CtnExecutor for YourExecutor {
             test_phase: TestPhase::Complete,
             state_results,
             message: format!("{} of {} objects compliant", passing, state_results.len()),
+            collected_data,
             ..Default::default()
         })
     }
@@ -954,7 +926,7 @@ impl CtnExecutor for YourExecutor {
 Always use `string::compare()` for string operations:
 
 ```rust
-use agent_core::execution::comparisons::string;
+use execution_engine::execution::comparisons::string;
 
 let passed = string::compare(actual, expected, operation).unwrap_or(false);
 ```
@@ -981,7 +953,7 @@ let passed = string::compare(actual, expected, operation).unwrap_or(false);
 For semantic version comparisons:
 
 ```rust
-use agent_core::execution::comparisons::version;
+use execution_engine::execution::comparisons::version;
 
 // Compares using semver rules: 2.10.0 > 2.9.0
 let passed = version::compare(actual, expected, operation).unwrap_or(false);
@@ -992,7 +964,7 @@ let passed = version::compare(actual, expected, operation).unwrap_or(false);
 For RPM-style epoch:version-release comparisons:
 
 ```rust
-use agent_core::execution::comparisons::evr;
+use execution_engine::execution::comparisons::evr;
 
 // Compares epoch:version-release format (e.g., "2:1.8.0-1.el9")
 let passed = evr::compare(actual, expected, operation).unwrap_or(false);
@@ -1005,25 +977,7 @@ let passed = evr::compare(actual, expected, operation).unwrap_or(false);
 ### Using contract_kit (Recommended)
 
 ```rust
-use contract_kit::agent_core_api::strategies::{CtnStrategyRegistry, StrategyError};
-
-pub fn create_registry() -> Result<CtnStrategyRegistry, StrategyError> {
-    let mut registry = CtnStrategyRegistry::new();
-
-    let contract = create_your_ctn_contract();
-    registry.register_ctn_strategy(
-        Box::new(YourCollector::new()),
-        Box::new(YourExecutor::new(contract)),
-    )?;
-
-    Ok(registry)
-}
-```
-
-### Using agent_core Directly
-
-```rust
-use agent_core::strategies::{CtnStrategyRegistry, StrategyError};
+use contract_kit::execution_api::strategies::{CtnStrategyRegistry, StrategyError};
 
 pub fn create_registry() -> Result<CtnStrategyRegistry, StrategyError> {
     let mut registry = CtnStrategyRegistry::new();
@@ -1041,7 +995,7 @@ pub fn create_registry() -> Result<CtnStrategyRegistry, StrategyError> {
 ### Scanning
 
 ```rust
-use contract_kit::agent_core_api::{scan_file, format_report};
+use contract_kit::execution_api::{scan_file, format_report};
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1055,6 +1009,285 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+```
+
+---
+
+## Command Execution
+
+Command-based collectors require careful handling of execution environment, output parsing, and type conversion.
+
+### The Command Sandbox
+
+Commands run in an **isolated sandbox** with these constraints:
+
+| Constraint | Description |
+|------------|-------------|
+| **No inherited environment** | Parent process env vars are NOT available |
+| **Whitelisted commands only** | Only explicitly allowed commands can execute |
+| **No shell expansion** | No globbing, pipes, or shell features |
+| **Timeout enforced** | Commands killed after timeout |
+| **Restricted PATH** | Only standard system paths |
+
+**Critical**: If your command needs environment variables, you must **explicitly provide them**.
+
+### SystemCommandExecutor
+
+```rust
+use execution_engine::strategies::SystemCommandExecutor;
+use std::time::Duration;
+
+// Create executor with default timeout
+let mut executor = SystemCommandExecutor::with_timeout(Duration::from_secs(5));
+
+// REQUIRED: Whitelist allowed commands
+executor.allow_commands(&[
+    "cat",
+    "stat",
+    "/usr/bin/stat",  // Absolute paths also work
+]);
+
+// Execute command
+let output = executor.execute(
+    "stat",
+    &["-c", "%a", "/etc/passwd"],
+    Some(Duration::from_secs(10)),  // Per-command timeout override
+)?;
+
+if output.exit_code == 0 {
+    let permissions = output.stdout.trim();
+    // permissions = "644"
+}
+```
+
+### Environment Variables
+
+Commands do **NOT** inherit environment variables. You must explicitly set any required variables:
+
+```rust
+// WRONG: Assumes $HOME is available
+let output = executor.execute("kubectl", &["config", "view"], None)?;
+// kubectl will fail - no KUBECONFIG or HOME available!
+
+// RIGHT: Explicitly provide required environment
+// Option 1: Read and pass specific env vars
+if let Ok(kubeconfig) = std::env::var("KUBECONFIG") {
+    // Pass via command args if supported
+    let output = executor.execute(
+        "kubectl",
+        &["--kubeconfig", &kubeconfig, "get", "pods", "-o", "json"],
+        None,
+    )?;
+}
+
+// Option 2: Use file paths directly
+let kubeconfig_path = std::env::var("KUBECONFIG")
+    .unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{}/.kube/config", home)
+    });
+
+if std::path::Path::new(&kubeconfig_path).exists() {
+    let output = executor.execute(
+        "kubectl",
+        &["--kubeconfig", &kubeconfig_path, "get", "pods"],
+        None,
+    )?;
+}
+```
+
+### Understanding Command Output
+
+Before implementing a collector, you must understand the **exact output format** of the command you're using. Document this in your CTN type reference.
+
+#### Example: `/proc/net/tcp` for TCP Listeners
+
+**Raw output:**
+```
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 12345
+   1: 0100007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000   101        0 23456
+```
+
+**Field breakdown:**
+
+| Field | Format | Example | Meaning |
+|-------|--------|---------|---------|
+| `local_address` | `IP:PORT` (hex) | `00000000:0016` | `0.0.0.0:22` |
+| `st` | Hex state | `0A` | `10` = LISTEN |
+
+**Conversion required:**
+```rust
+// Port: hex to decimal
+let port_hex = "0016";
+let port = u16::from_str_radix(port_hex, 16)?;  // 22
+
+// IP: hex bytes in reverse order
+let ip_hex = "0100007F";  // 127.0.0.1 stored as 7F 00 00 01
+let bytes = hex_to_bytes(ip_hex)?;
+let ip = format!("{}.{}.{}.{}", bytes[3], bytes[2], bytes[1], bytes[0]);
+// ip = "127.0.0.1"
+
+// State: 0A (10) = TCP_LISTEN
+let is_listening = state_hex == "0A";
+```
+
+#### Example: `stat` for File Metadata
+
+**Command:** `stat -c '%a %U %G %s' /etc/passwd`
+
+**Output:** `644 root root 2845`
+
+**Field mapping:**
+
+| Format | Output | Type | Notes |
+|--------|--------|------|-------|
+| `%a` | `644` | String | Octal permissions |
+| `%U` | `root` | String | Owner name |
+| `%G` | `root` | String | Group name |
+| `%s` | `2845` | Integer | Size in bytes |
+
+```rust
+let output = executor.execute("stat", &["-c", "%a %U %G %s", path], None)?;
+let parts: Vec<&str> = output.stdout.trim().split_whitespace().collect();
+
+// SAFE: Use .get() instead of direct indexing
+let permissions = parts.get(0).map(|s| s.to_string());
+let owner = parts.get(1).map(|s| s.to_string());
+let group = parts.get(2).map(|s| s.to_string());
+let size = parts.get(3).and_then(|s| s.parse::<i64>().ok());
+```
+
+#### Example: `kubectl get` for Kubernetes Resources
+
+**Command:** `kubectl get pod -n kube-system -l component=kube-apiserver -o json`
+
+**Output structure:**
+```json
+{
+  "apiVersion": "v1",
+  "kind": "PodList",
+  "items": [
+    {
+      "metadata": { "name": "kube-apiserver-control-plane", "namespace": "kube-system" },
+      "spec": {
+        "containers": [{
+          "name": "kube-apiserver",
+          "command": ["kube-apiserver", "--authorization-mode=Node,RBAC", "..."]
+        }]
+      },
+      "status": { "phase": "Running" }
+    }
+  ]
+}
+```
+
+**Parsing:**
+```rust
+let output = executor.execute("kubectl", &["get", "pod", "-o", "json"], None)?;
+let json: serde_json::Value = serde_json::from_str(&output.stdout)?;
+
+// Handle both list and single resource responses
+let items = if let Some(items) = json.get("items").and_then(|i| i.as_array()) {
+    items.clone()
+} else if json.get("metadata").is_some() {
+    vec![json.clone()]  // Single resource
+} else {
+    vec![]
+};
+
+let count = items.len();
+let found = !items.is_empty();
+```
+
+### Type Conversion Rules
+
+The executor expects specific types. Document what type your collector returns:
+
+| Source Data | ResolvedValue | Notes |
+|-------------|---------------|-------|
+| `"644"` (permissions) | `String` | Keep as string for pattern matching |
+| `"2845"` (file size) | `Integer` | Parse to i64 for numeric comparisons |
+| `"true"` / `"false"` | `Boolean` | Parse to bool |
+| `"1.2.3"` (version) | `String` | Use version comparator |
+| JSON object | `RecordData` | For record check validation |
+
+```rust
+// Permissions - keep as string
+data.add_field("permissions".to_string(),
+    ResolvedValue::String("0644".to_string()));
+
+// Size - parse to integer for comparisons like `size int > 1000`
+data.add_field("size".to_string(),
+    ResolvedValue::Integer(file_size));
+
+// Boolean - parse the string
+let is_enabled = value == "1" || value.eq_ignore_ascii_case("true");
+data.add_field("enabled".to_string(),
+    ResolvedValue::Boolean(is_enabled));
+```
+
+### Safe Output Parsing
+
+**Always use `.get()` instead of direct indexing:**
+
+```rust
+// WRONG: Will panic if output is malformed
+let parts: Vec<&str> = output.split(':').collect();
+let port = parts[1];  // PANIC if no ':'
+
+// RIGHT: Safe access with Option
+let parts: Vec<&str> = output.split(':').collect();
+let port = parts.get(1).ok_or_else(|| CollectionError::CollectionFailed {
+    object_id: object_id.clone(),
+    reason: "Malformed output: missing port field".to_string(),
+})?;
+```
+
+### Documenting Command Output
+
+Every CTN type that uses commands should document:
+
+1. **Command format** - Exact command and arguments
+2. **Expected output** - Sample output with field positions
+3. **Field mappings** - How output maps to collected data fields
+4. **Type conversions** - What type each field becomes
+5. **Error conditions** - What output indicates errors
+
+See `contract_kit/docs/` for CTN type reference documentation examples.
+
+### Platform Command Configuration
+
+```rust
+use execution_engine::strategies::SystemCommandExecutor;
+use std::time::Duration;
+
+/// Create command executor for Linux filesystem operations
+pub fn create_linux_fs_executor() -> SystemCommandExecutor {
+    let mut executor = SystemCommandExecutor::with_timeout(Duration::from_secs(5));
+
+    executor.allow_commands(&[
+        "stat",        // File metadata
+        "cat",         // File content
+        "ls",          // Directory listing
+        "readlink",    // Symlink resolution
+    ]);
+
+    executor
+}
+
+/// Create command executor for Kubernetes operations
+pub fn create_k8s_executor() -> SystemCommandExecutor {
+    let mut executor = SystemCommandExecutor::with_timeout(Duration::from_secs(30));
+
+    executor.allow_commands(&[
+        "kubectl",
+        "/usr/local/bin/kubectl",
+        "/usr/bin/kubectl",
+    ]);
+
+    executor
 }
 ```
 
@@ -1097,128 +1330,12 @@ impl CtnDataCollector for YourCollector {
 }
 ```
 
-### Command Execution
-
-For command-based collectors, use `SystemCommandExecutor` with security controls:
-
-```rust
-use agent_core::strategies::SystemCommandExecutor;
-use std::time::Duration;
-
-// Create executor with default timeout
-let mut executor = SystemCommandExecutor::with_timeout(Duration::from_secs(5));
-
-// REQUIRED: Whitelist allowed commands
-executor.allow_commands(&["rpm", "systemctl", "sysctl", "getenforce"]);
-
-// Execute command
-let output = executor.execute(
-    "rpm",
-    &["-q", "--queryformat", "%{VERSION}", "openssl"],
-    Some(Duration::from_secs(10)),  // Per-command timeout override
-)?;
-
-if output.exit_code == 0 {
-    println!("Version: {}", output.stdout.trim());
-} else {
-    eprintln!("Error: {}", output.stderr);
-}
-```
-
-**Security Features:**
-
-| Feature | Description |
-|---------|-------------|
-| Whitelist-only | Only explicitly allowed commands can execute |
-| Timeout enforcement | Commands killed after timeout |
-| No shell expansion | Arguments passed directly, no shell injection |
-| Environment cleared | `env_clear()` with restricted `PATH` only |
-| Exit code checking | Non-zero exit codes properly handled |
-
-**Platform Command Configuration Example (RHEL 9):**
-
-```rust
-use agent_core::strategies::SystemCommandExecutor;
-use std::time::Duration;
-
-pub fn create_rhel9_command_executor() -> SystemCommandExecutor {
-    let mut executor = SystemCommandExecutor::with_timeout(Duration::from_secs(5));
-
-    executor.allow_commands(&[
-        "rpm",        // Package management
-        "systemctl",  // Service status
-        "getenforce", // SELinux status
-        "sysctl",     // Kernel parameters
-        "auditctl",   // Audit rules
-        "id",         // User info
-        "stat",       // File metadata
-        "getent",     // User/group database
-    ]);
-
-    executor
-}
-```
-
-**Batch Command Optimization:**
-
-```rust
-impl CtnDataCollector for RpmCollector {
-    fn supports_batch_collection(&self) -> bool {
-        true
-    }
-
-    fn collect_batch(
-        &self,
-        objects: Vec<&ExecutableObject>,
-        _contract: &CtnContract,
-    ) -> Result<HashMap<String, CollectedData>, CollectionError> {
-        // Single rpm -qa call for ALL packages
-        let output = self.executor.execute("rpm", &["-qa", "--queryformat", "%{NAME}|%{VERSION}\\n"], None)?;
-
-        // Parse output once
-        let packages: HashMap<String, String> = output.stdout
-            .lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split('|').collect();
-                if parts.len() == 2 {
-                    Some((parts[0].to_string(), parts[1].to_string()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Match against requested objects
-        let mut results = HashMap::new();
-        for object in objects {
-            let pkg_name = self.extract_field(object, "package_name")?;
-            let mut data = CollectedData::new(
-                object.identifier.clone(),
-                "rpm_package".to_string(),
-                self.collector_id().to_string(),
-            );
-
-            if let Some(version) = packages.get(&pkg_name) {
-                data.add_field("installed".to_string(), ResolvedValue::Boolean(true));
-                data.add_field("version".to_string(), ResolvedValue::String(version.clone()));
-            } else {
-                data.add_field("installed".to_string(), ResolvedValue::Boolean(false));
-            }
-
-            results.insert(object.identifier.clone(), data);
-        }
-
-        Ok(results)
-    }
-}
-```
-
 ### Record Validation
 
 For structured JSON/record data validation:
 
 ```rust
-use agent_core::execution::record_validation::{validate_record_checks, RecordValidationResult};
+use execution_engine::execution::record_validation::{validate_record_checks, RecordValidationResult};
 use common::ast::RecordData;
 
 // In your executor, handle record checks
@@ -1259,8 +1376,8 @@ for state in &criterion.states {
 **Record check features:**
 
 - Nested field access: `settings.security.enabled`
-- Array wildcard: `users[*].role` (check all elements)
-- Array index: `items[0].name` (specific element)
+- Array index: `items.0.name` (specific element)
+- Array wildcard: `users.*.role` (check all elements)
 - Entity checks: `all`, `at_least_one`, `none`, `only_one`
 
 ### Filter Support
@@ -1304,14 +1421,6 @@ SET operations are expanded by the resolution engine. Your collector sees indivi
 
 // Your collector receives pkg1 and pkg2 as separate collection requests
 ```
-
-**SET operation types:**
-
-| Operation | Operands | Description |
-|-----------|----------|-------------|
-| `union` | 1+ | Combine all objects from all operands |
-| `intersection` | 2+ | Objects present in all operands |
-| `complement` | exactly 2 | Objects in first but not second |
 
 ---
 
@@ -1410,6 +1519,19 @@ match fs::metadata(&path) {
 }
 ```
 
+**Command fails due to missing environment variable**
+
+```rust
+// WRONG: Assumes env vars are inherited
+let output = executor.execute("my-tool", &["--config"], None)?;
+
+// RIGHT: Explicitly handle required env vars
+let config_path = std::env::var("MY_TOOL_CONFIG")
+    .unwrap_or_else(|_| "/etc/my-tool/config.yaml".to_string());
+
+let output = executor.execute("my-tool", &["--config", &config_path], None)?;
+```
+
 **"Field not found" errors**
 
 The executor can't find a field in collected data.
@@ -1420,6 +1542,20 @@ The executor can't find a field in collected data.
 // Solution: Add field mapping in contract
 contract.field_mappings.validation_mappings.state_to_data
     .insert("permissions".to_string(), "file_mode".to_string());
+```
+
+**Type mismatch in comparisons**
+
+Comparisons fail due to type differences.
+
+```rust
+// Problem: Comparing String to Integer
+(ResolvedValue::String(_), ResolvedValue::Integer(_), _) => false
+
+// Solution: Ensure collector returns correct types
+// If ESP expects `size int > 1000`, collector must return Integer
+data.add_field("size".to_string(), ResolvedValue::Integer(file_size));
+// NOT: ResolvedValue::String(file_size.to_string())
 ```
 
 **Pattern matching fails**
@@ -1438,54 +1574,6 @@ match string::compare(actual, expected, Operation::PatternMatch) {
         false
     }
 }
-```
-
-**Behavior hints ignored**
-
-BEHAVIOR directives don't affect collection.
-
-```rust
-// Problem: Not checking hints in collector
-
-// Solution: Validate and check hints
-contract.validate_behavior_hints(hints)?;
-
-if hints.has_flag("recursive_scan") {
-    // Enable recursive scanning
-}
-
-let max_depth = hints.get_parameter_as_int("max_depth").unwrap_or(3);
-```
-
-**Batch collection returns empty**
-
-Batch collection doesn't return results.
-
-```rust
-// Problem: supports_batch_collection returns false
-
-// Solution: Return true and implement collect_batch
-fn supports_batch_collection(&self) -> bool {
-    true  // Must return true!
-}
-
-fn collect_batch(...) -> Result<HashMap<String, CollectedData>, CollectionError> {
-    // Implementation required
-}
-```
-
-**Type mismatch in comparisons**
-
-Comparisons fail due to type differences.
-
-```rust
-// Problem: Comparing String to Integer
-(ResolvedValue::String(_), ResolvedValue::Integer(_), _) => false
-
-// Solution: Ensure collector returns correct types
-// If ESP expects `size int > 1000`, collector must return Integer
-data.add_field("size".to_string(), ResolvedValue::Integer(file_size));
-// NOT: ResolvedValue::String(file_size.to_string())
 ```
 
 ### Debug Logging
@@ -1538,12 +1626,16 @@ fn collect_for_ctn_with_hints(...) -> Result<CollectedData, CollectionError> {
 - Implement batch collection when beneficial (command-based, API-based)
 - Set timeouts on all I/O operations
 - Return typed values matching contract expectations
+- Use `.get()` for safe array/slice access
+- Explicitly handle required environment variables
 
 ❌ **Don't:**
 - Silently ignore errors
 - Make API/command calls without timeout
 - Collect more than contract specifies
 - Perform validation logic (that's the executor's job)
+- Use direct indexing (`parts[0]`) on parsed output
+- Assume environment variables are inherited
 
 ### Executor Implementation
 
@@ -1552,6 +1644,7 @@ fn collect_for_ctn_with_hints(...) -> Result<CollectedData, CollectionError> {
 - Use framework helper functions (`evaluate_existence_check`, `evaluate_item_check`, `evaluate_state_operator`)
 - Apply field mappings from contract
 - Provide detailed failure messages
+- Include collected_data in results
 
 ❌ **Don't:**
 - Implement custom string comparison logic
@@ -1566,12 +1659,23 @@ fn collect_for_ctn_with_hints(...) -> Result<CollectedData, CollectionError> {
 - Clear environment variables (done automatically)
 - Declare `requires_elevated_privileges` accurately
 - Document sensitive fields in contract
+- Explicitly provide only needed env vars to commands
 
 ❌ **Don't:**
 - Spawn shell processes
 - Use string interpolation in commands
 - Execute commands not in whitelist
 - Collect more data than needed for validation
+- Pass sensitive env vars unnecessarily
+
+### CTN Type Documentation
+
+✅ **Do:**
+- Document exact command format and arguments
+- Show sample output with field positions
+- Specify type conversions (string → int, etc.)
+- List error conditions and their output
+- Note platform-specific behavior
 
 ---
 
@@ -1593,6 +1697,8 @@ fn collect_for_ctn_with_hints(...) -> Result<CollectedData, CollectionError> {
 - [ ] Returns all fields listed in contract's `required_data_fields`
 - [ ] Does not exceed contract's collection scope
 - [ ] Sets timeouts on I/O operations
+- [ ] Uses safe indexing (`.get()`) for parsed output
+- [ ] Explicitly handles required environment variables
 
 ### Executor
 - [ ] Implements `CtnExecutor` trait
@@ -1600,11 +1706,18 @@ fn collect_for_ctn_with_hints(...) -> Result<CollectedData, CollectionError> {
 - [ ] Uses framework helpers for TEST evaluation
 - [ ] Applies field mappings from contract
 - [ ] Does not perform additional collection
+- [ ] Includes collected_data in results
 
 ### Integration
 - [ ] Registered in registry with matching collector/executor
 - [ ] End-to-end test passing
 - [ ] Example ESP file provided
+
+### Documentation
+- [ ] CTN type reference document created
+- [ ] Command output format documented
+- [ ] Type conversions documented
+- [ ] Error conditions documented
 
 ---
 
@@ -1614,16 +1727,14 @@ See `contract_kit/src/` for complete examples:
 
 | Type | Contract | Collector | Executor |
 |------|----------|-----------|----------|
-| `file_metadata` | `contracts/file_contracts.rs` | `collectors/filesystem.rs` | `executors/file_metadata.rs` |
-| `file_content` | `contracts/file_contracts.rs` | `collectors/filesystem.rs` | `executors/file_content.rs` |
-| `json_record` | `contracts/json_contracts.rs` | `collectors/filesystem.rs` | `executors/json_record.rs` |
-| `rpm_package` | `contracts/rpm_contracts.rs` | `collectors/command.rs` | `executors/rpm_package.rs` |
-| `systemd_service` | `contracts/systemd_contracts.rs` | `collectors/command.rs` | `executors/systemd_service.rs` |
-| `sysctl_parameter` | `contracts/sysctl_contracts.rs` | `collectors/command.rs` | `executors/sysctl_parameter.rs` |
-| `selinux_status` | `contracts/selinux_contracts.rs` | `collectors/command.rs` | `executors/selinux_status.rs` |
-| `tcp_listener` | `contracts/tcp_listener_contracts.rs` | `collectors/tcp_listener.rs` | `executors/tcp_listener.rs` |
-| `k8s_resource` | `contracts/k8s_resource_contracts.rs` | `collectors/k8s_resource.rs` | `executors/k8s_resource.rs` |
+| `file_metadata` | `contracts/file_metadata.rs` | `collectors/file_metadata.rs` | `executors/file_metadata.rs` |
+| `file_content` | `contracts/file_content.rs` | `collectors/file_content.rs` | `executors/file_content.rs` |
+| `json_record` | `contracts/json_record.rs` | `collectors/json_record.rs` | `executors/json_record.rs` |
+| `tcp_listener` | `contracts/tcp_listener.rs` | `collectors/tcp_listener.rs` | `executors/tcp_listener.rs` |
+| `k8s_resource` | `contracts/k8s_resource.rs` | `collectors/k8s_resource.rs` | `executors/k8s_resource.rs` |
 | `computed_values` | `contracts/computed_values.rs` | `collectors/computed_values.rs` | `executors/computed_values.rs` |
+
+See `contract_kit/docs/` for CTN type reference documentation.
 
 ---
 
@@ -1635,7 +1746,8 @@ To create a new CTN type:
 2. **Implement Collector** — Gather data, handle behaviors, return `CollectedData`
 3. **Implement Executor** — Three-phase validation (existence → state → item)
 4. **Register Strategy** — Pair collector + executor in registry
-5. **Test** — Unit tests, integration tests, example ESP file
+5. **Document** — Create CTN type reference with command output formats
+6. **Test** — Unit tests, integration tests, example ESP file
 
 **Key Principles:**
 
@@ -1644,4 +1756,7 @@ To create a new CTN type:
 - Executors validate data without collection logic
 - Field mappings decouple ESP names from internal names
 - Always use `string::compare()` for string operations
-- Command execution requires explicit whitelisting and timeouts, and must not use a shell
+- Command execution requires explicit whitelisting and timeouts
+- Commands run in a sandbox — no inherited environment variables
+- Document command output formats and type conversions
+- Use safe indexing (`.get()`) when parsing output

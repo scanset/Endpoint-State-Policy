@@ -3,11 +3,11 @@
 //! Validates Kubernetes API resources using kubectl.
 //! Returns resource JSON as RecordData for record check validation.
 
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CollectionMode, CollectionStrategy, CtnContract, ObjectFieldSpec, PerformanceHints,
     StateFieldSpec,
 };
-use agent_core::types::common::{DataType, Operation};
+use execution_engine::types::common::{DataType, Operation};
 
 /// Create contract for k8s_resource CTN type
 ///

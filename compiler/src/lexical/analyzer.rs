@@ -612,8 +612,15 @@ impl LexicalAnalyzer {
 
     fn classify_word(&mut self, word: &str) -> Token {
         match classify_word_type(word) {
-            WordType::Keyword => Token::Keyword(Keyword::parse(word).unwrap()),
-            WordType::SymbolOperator => classify_operator_word(word).unwrap(),
+            WordType::Keyword => {
+                match Keyword::parse(word) {
+                    Some(kw) => Token::Keyword(kw),
+                    None => Token::Identifier(word.to_string()), // Fallback
+                }
+            }
+            WordType::SymbolOperator => {
+                classify_operator_word(word).unwrap_or(Token::Identifier(word.to_string()))
+            }
             WordType::DataTypeIdentifier
             | WordType::ContextSensitiveIdentifier
             | WordType::RegularIdentifier => match word {
@@ -635,7 +642,9 @@ impl LexicalAnalyzer {
             if *ch == '\n' || *ch == '\r' {
                 break;
             }
-            let (_, ch) = chars.next().unwrap();
+            let Some((_, ch)) = chars.next() else {
+                break; // or return appropriate error
+            };
             content.push(ch);
             len += ch.len_utf8();
 

@@ -107,6 +107,7 @@ impl From<Criticality> for Weight {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

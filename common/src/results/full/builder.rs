@@ -188,6 +188,7 @@ impl std::fmt::Display for FullResultBuildError {
 
 impl std::error::Error for FullResultBuildError {}
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

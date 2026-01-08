@@ -2,17 +2,17 @@
 //!
 //! Validates Kubernetes resources using record checks on JSON data.
 
-use agent_core::execution::{
+use common::results::Outcome;
+use execution_engine::execution::{
     evaluate_existence_check, evaluate_item_check, evaluate_state_operator,
     record_validation::validate_record_checks,
 };
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CollectedData, CtnContract, CtnExecutionError, CtnExecutionResult, CtnExecutor,
     FieldValidationResult, StateValidationResult, TestPhase,
 };
-use agent_core::types::common::{Operation, ResolvedValue};
-use agent_core::types::execution_context::ExecutableCriterion;
-use common::results::Outcome;
+use execution_engine::types::common::{Operation, ResolvedValue};
+use execution_engine::types::execution_context::ExecutableCriterion;
 use std::collections::HashMap;
 
 /// Executor for k8s_resource validation
@@ -72,7 +72,7 @@ impl CtnExecutor for K8sResourceExecutor {
     fn execute_with_contract(
         &self,
         criterion: &ExecutableCriterion,
-        collected_data: &HashMap<String, CollectedData>,
+        collected_data: HashMap<String, CollectedData>,
         _contract: &CtnContract,
     ) -> Result<CtnExecutionResult, CtnExecutionError> {
         let test_spec = &criterion.test;
@@ -91,14 +91,15 @@ impl CtnExecutor for K8sResourceExecutor {
                     "Existence check failed: expected {} resources, found {}",
                     objects_expected, objects_found
                 ),
-            ));
+            )
+            .with_collected_data(collected_data));
         }
 
         // Phase 2: State validation
         let mut state_results = Vec::new();
         let mut failure_messages = Vec::new();
 
-        for (object_id, data) in collected_data {
+        for (object_id, data) in &collected_data {
             let mut all_field_results = Vec::new();
 
             // Check if resource was found
@@ -289,6 +290,7 @@ impl CtnExecutor for K8sResourceExecutor {
                 "objects_passing": objects_passing,
             }),
             execution_metadata: Default::default(),
+            collected_data,
         })
     }
 

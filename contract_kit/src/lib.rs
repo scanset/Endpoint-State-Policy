@@ -9,17 +9,17 @@
 //! - `executors` - Validation logic for each CTN type
 //! - `contracts` - CTN type definitions and field mappings
 //! - `commands` - Platform-specific command whitelists
-//! - `agent_core_api` - High-level scan execution API
+//! - `execution_api` - High-level scan execution API
 //!
 //! ## Usage
 //!
 //! To build a scanner, create a new crate that:
 //! 1. Imports collectors/executors from `contract_kit`
-//! 2. Creates a `CtnStrategyRegistry` using `agent_core_api` types
+//! 2. Creates a `CtnStrategyRegistry` using `execution_api` types
 //! 3. Calls `scan_file()` or `scan_ast()`
 //!
 //! ```rust,ignore
-//! use contract_kit::agent_core_api::{
+//! use contract_kit::execution_api::{
 //!     scan_file, CtnStrategyRegistry, CtnStrategy,
 //! };
 //! use contract_kit::collectors::FileMetadataCollector;
@@ -39,8 +39,8 @@
 //! let result = scan_file("policy.esp", Arc::new(registry))?;
 //! ```
 
-pub mod agent_core_api;
 pub mod collectors;
 pub mod commands;
 pub mod contracts;
+pub mod execution_api;
 pub mod executors;

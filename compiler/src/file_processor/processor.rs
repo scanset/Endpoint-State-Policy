@@ -112,9 +112,9 @@ impl FileMetadata {
         }
 
         if unit_index == 0 {
-            format!("{} {}", self.size, UNITS[unit_index])
+            format!("{} {}", self.size, UNITS.get(unit_index).unwrap_or(&"?"))
         } else {
-            format!("{:.2} {}", size, UNITS[unit_index])
+            format!("{:.2} {}", size, UNITS.get(unit_index).unwrap_or(&"?"))
         }
     }
 
@@ -640,6 +640,12 @@ pub fn get_large_file_threshold() -> u64 {
     LARGE_FILE_THRESHOLD
 }
 
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 #[cfg(test)]
 mod tests {
     use super::*;

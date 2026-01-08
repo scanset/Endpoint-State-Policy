@@ -43,6 +43,7 @@ fn canonicalize_value(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

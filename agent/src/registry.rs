@@ -3,7 +3,7 @@
 //! Creates and configures the CTN strategy registry with all available
 //! collectors and executors for the agent.
 
-use contract_kit::agent_core_api::strategies::{CtnStrategyRegistry, StrategyError};
+use contract_kit::execution_api::strategies::{CtnStrategyRegistry, StrategyError};
 use contract_kit::{collectors, commands, contracts, executors};
 
 /// Create a registry with all available strategies
@@ -12,10 +12,6 @@ use contract_kit::{collectors, commands, contracts, executors};
 /// - File metadata validation (fast stat-based checks)
 /// - File content validation (string operations)
 /// - JSON record validation (structured data)
-/// - RPM package validation (installation and version checks)
-/// - Systemd service validation (active, enabled, loaded status)
-/// - Sysctl parameter validation (kernel parameters)
-/// - SELinux status validation (enforcement mode)
 /// - TCP listener validation (port listening state)
 /// - Kubernetes resource validation (K8s API objects)
 pub fn create_scanner_registry() -> Result<CtnStrategyRegistry, StrategyError> {
@@ -64,36 +60,6 @@ pub fn create_scanner_registry() -> Result<CtnStrategyRegistry, StrategyError> {
     registry.register_ctn_strategy(
         Box::new(k8s_collector),
         Box::new(executors::K8sResourceExecutor::new(k8s_resource_contract)),
-    )?;
-
-    // Create command executor with RHEL 9 whitelist
-    let command_executor = commands::create_rhel9_command_executor();
-    let command_collector =
-        collectors::CommandCollector::new("rhel9-command-collector", command_executor);
-
-    // Register command-based strategies
-    let rpm_contract = contracts::create_rpm_package_contract();
-    registry.register_ctn_strategy(
-        Box::new(command_collector.clone()),
-        Box::new(executors::RpmPackageExecutor::new(rpm_contract)),
-    )?;
-
-    let systemd_contract = contracts::create_systemd_service_contract();
-    registry.register_ctn_strategy(
-        Box::new(command_collector.clone()),
-        Box::new(executors::SystemdServiceExecutor::new(systemd_contract)),
-    )?;
-
-    let sysctl_contract = contracts::create_sysctl_parameter_contract();
-    registry.register_ctn_strategy(
-        Box::new(command_collector.clone()),
-        Box::new(executors::SysctlParameterExecutor::new(sysctl_contract)),
-    )?;
-
-    let selinux_contract = contracts::create_selinux_status_contract();
-    registry.register_ctn_strategy(
-        Box::new(command_collector),
-        Box::new(executors::SelinuxStatusExecutor::new(selinux_contract)),
     )?;
 
     Ok(registry)

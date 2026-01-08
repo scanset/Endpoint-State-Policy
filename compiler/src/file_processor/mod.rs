@@ -129,6 +129,12 @@ pub fn init_file_processor_logging() -> Result<(), String> {
     Ok(())
 }
 
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 #[cfg(test)]
 mod tests {
     use super::*;

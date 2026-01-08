@@ -293,6 +293,7 @@ pub fn validate_metadata(metadata: &MetaDataBlock) -> Result<(), Vec<String>> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

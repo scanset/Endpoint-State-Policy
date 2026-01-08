@@ -105,6 +105,7 @@ impl std::fmt::Display for HashingError {
 
 impl std::error::Error for HashingError {}
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

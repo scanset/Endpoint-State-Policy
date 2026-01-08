@@ -8,8 +8,8 @@ license.workspace = true
 
 
 [dependencies]
-# Depends on agent_core (which transitively gets compiler)
-agent_core.workspace = true
+# Depends on execution_engine (which transitively gets compiler)
+execution_engine.workspace = true
 common.workspace = true
 compiler.workspace = true
 

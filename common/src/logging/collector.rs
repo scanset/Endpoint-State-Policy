@@ -116,7 +116,11 @@ impl ErrorCollector {
 
     /// Record an event for a specific file
     pub fn record_event(&self, file_path: &Path, event: LogEvent) {
-        let mut events = self.file_events.lock().unwrap();
+        let Ok(mut events) = self.file_events.lock() else {
+            // Lock poisoned - log to stderr and continue
+            eprintln!("Warning: Failed to acquire lock in record_event");
+            return;
+        };
 
         // Use compile-time constant for per-file event limits
         let max_events_per_file = MAX_LOG_EVENTS_PER_FILE;
@@ -139,19 +143,26 @@ impl ErrorCollector {
 
     /// Record file processing context
     pub fn record_file_context(&self, context: FileProcessingContext) {
-        let mut contexts = self.file_contexts.lock().unwrap();
+        let Ok(mut contexts) = self.file_contexts.lock() else {
+            eprintln!("Warning: Failed to acquire lock in record_file_context");
+            return;
+        };
         contexts.insert(context.file_path.clone(), context);
     }
 
     /// Get all events for a specific file
     pub fn get_file_events(&self, file_path: &Path) -> Vec<LogEvent> {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return Vec::new();
+        };
         events.get(file_path).cloned().unwrap_or_default()
     }
 
     /// Get errors for a specific file
     pub fn get_file_errors(&self, file_path: &Path) -> Vec<LogEvent> {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return Vec::new();
+        };
         events
             .get(file_path)
             .map(|events| events.iter().filter(|e| e.is_error()).cloned().collect())
@@ -160,7 +171,9 @@ impl ErrorCollector {
 
     /// Get warnings for a specific file
     pub fn get_file_warnings(&self, file_path: &Path) -> Vec<LogEvent> {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return Vec::new();
+        };
         events
             .get(file_path)
             .map(|events| events.iter().filter(|e| e.is_warning()).cloned().collect())
@@ -169,13 +182,20 @@ impl ErrorCollector {
 
     /// Get all file events (for cargo-style output)
     pub fn get_all_file_events(&self) -> BTreeMap<PathBuf, Vec<LogEvent>> {
-        self.file_events.lock().unwrap().clone()
+        let Ok(events) = self.file_events.lock() else {
+            return BTreeMap::new();
+        };
+        events.clone()
     }
 
     /// Get processing summary
     pub fn get_summary(&self) -> ProcessingSummary {
-        let events = self.file_events.lock().unwrap();
-        let contexts = self.file_contexts.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return ProcessingSummary::default();
+        };
+        let Ok(contexts) = self.file_contexts.lock() else {
+            return ProcessingSummary::default();
+        };
 
         let mut summary = ProcessingSummary::new();
         summary.total_files = events.len();
@@ -222,7 +242,9 @@ impl ErrorCollector {
 
     /// Get error count for a specific file
     pub fn get_file_error_count(&self, file_path: &Path) -> usize {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return 0;
+        };
         events
             .get(file_path)
             .map(|events| events.iter().filter(|e| e.is_error()).count())
@@ -231,7 +253,9 @@ impl ErrorCollector {
 
     /// Get warning count for a specific file
     pub fn get_file_warning_count(&self, file_path: &Path) -> usize {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return 0;
+        };
         events
             .get(file_path)
             .map(|events| events.iter().filter(|e| e.is_warning()).count())
@@ -250,7 +274,9 @@ impl ErrorCollector {
 
     /// Get files with errors
     pub fn get_files_with_errors(&self) -> Vec<PathBuf> {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return Vec::new();
+        };
         events
             .iter()
             .filter(|(_, events)| events.iter().any(|e| e.is_error()))
@@ -260,7 +286,9 @@ impl ErrorCollector {
 
     /// Get files with warnings (but no errors)
     pub fn get_files_with_warnings(&self) -> Vec<PathBuf> {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return Vec::new();
+        };
         events
             .iter()
             .filter(|(_, events)| {
@@ -274,7 +302,9 @@ impl ErrorCollector {
 
     /// Get successful files (no errors or warnings)
     pub fn get_successful_files(&self) -> Vec<PathBuf> {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return Vec::new();
+        };
         let all_files: std::collections::HashSet<PathBuf> = events.keys().cloned().collect();
         let files_with_issues: std::collections::HashSet<PathBuf> = events
             .iter()
@@ -287,7 +317,9 @@ impl ErrorCollector {
 
     /// Get critical errors (errors that require halting)
     pub fn get_critical_errors(&self) -> Vec<(PathBuf, LogEvent)> {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return Vec::new();
+        };
         let mut critical_errors = Vec::new();
 
         for (path, file_events) in events.iter() {
@@ -303,7 +335,9 @@ impl ErrorCollector {
 
     /// Get events by severity
     pub fn get_events_by_severity(&self, min_severity: &str) -> Vec<(PathBuf, LogEvent)> {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return Vec::new();
+        };
         let mut filtered_events = Vec::new();
 
         for (path, file_events) in events.iter() {
@@ -329,15 +363,19 @@ impl ErrorCollector {
 
     /// Clear all collected data
     pub fn clear(&self) {
-        let mut events = self.file_events.lock().unwrap();
-        let mut contexts = self.file_contexts.lock().unwrap();
-        events.clear();
-        contexts.clear();
+        if let Ok(mut events) = self.file_events.lock() {
+            events.clear();
+        }
+        if let Ok(mut contexts) = self.file_contexts.lock() {
+            contexts.clear();
+        }
     }
 
     /// Get total event count across all files
     pub fn total_event_count(&self) -> usize {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return 0;
+        };
         events.values().map(|v| v.len()).sum()
     }
 
@@ -362,7 +400,9 @@ impl ErrorCollector {
 
     /// Check if we're approaching per-file limits
     pub fn check_file_event_limits(&self, file_path: &Path) -> bool {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return false;
+        };
         if let Some(file_events) = events.get(file_path) {
             file_events.len() >= (MAX_LOG_EVENTS_PER_FILE * 90 / 100) // 90% threshold
         } else {
@@ -372,7 +412,9 @@ impl ErrorCollector {
 
     /// Get per-file capacity information
     pub fn get_file_capacity_info(&self, file_path: &Path) -> (usize, usize, f64) {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return (0, MAX_LOG_EVENTS_PER_FILE, 0.0);
+        };
         let current = events
             .get(file_path)
             .map(|events| events.len())
@@ -388,7 +430,9 @@ impl ErrorCollector {
 
     /// Get audit-level events (using security constants)
     pub fn get_audit_events(&self) -> Vec<(PathBuf, LogEvent)> {
-        let events = self.file_events.lock().unwrap();
+        let Ok(events) = self.file_events.lock() else {
+            return Vec::new();
+        };
         let mut audit_events = Vec::new();
 
         for (path, file_events) in events.iter() {
@@ -410,12 +454,19 @@ impl ErrorCollector {
 
     /// Get system resource usage information
     pub fn get_resource_usage(&self) -> CollectorResourceUsage {
-        let events = self.file_events.lock().unwrap();
-        let contexts = self.file_contexts.lock().unwrap();
+        let (total_events, total_files) = {
+            let Ok(events) = self.file_events.lock() else {
+                return CollectorResourceUsage::default();
+            };
+            (events.values().map(|v| v.len()).sum(), events.len())
+        };
 
-        let total_events = events.values().map(|v| v.len()).sum();
-        let total_files = events.len();
-        let total_contexts = contexts.len();
+        let total_contexts = {
+            let Ok(contexts) = self.file_contexts.lock() else {
+                return CollectorResourceUsage::default();
+            };
+            contexts.len()
+        };
 
         // Estimate memory usage (rough approximation)
         let estimated_memory_bytes = total_events * 512 + total_contexts * 256; // Rough estimate
@@ -443,7 +494,7 @@ impl Default for ErrorCollector {
 }
 
 /// Resource usage information for the collector
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CollectorResourceUsage {
     pub total_events: usize,
     pub total_files: usize,
@@ -630,6 +681,7 @@ pub fn format_detailed_errors(collector: &ErrorCollector) -> String {
     output
 }
 
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 #[cfg(test)]
 mod tests {
     use super::*;

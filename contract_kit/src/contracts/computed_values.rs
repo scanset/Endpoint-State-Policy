@@ -5,11 +5,11 @@
 //!
 //! Use case: Validate that RUN operations produce expected results
 
-use agent_core::strategies::{
+use execution_engine::strategies::{
     CollectionMode, CollectionStrategy, CtnContract, ObjectFieldSpec, PerformanceHints,
     StateFieldSpec,
 };
-use agent_core::types::common::{DataType, Operation};
+use execution_engine::types::common::{DataType, Operation};
 
 /// Create contract for computed_values CTN type
 ///

@@ -31,6 +31,21 @@ thread_local! {
     static FILE_CONTEXT: RefCell<Option<FileProcessingContext>> = const {RefCell::new(None)};
 }
 
+/// Error returned when global logging is not initialized
+#[derive(Debug, Clone)]
+pub struct LoggingNotInitializedError;
+
+impl std::fmt::Display for LoggingNotInitializedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Global logging not initialized. Call init_global_logging() first."
+        )
+    }
+}
+
+impl std::error::Error for LoggingNotInitializedError {}
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
@@ -58,7 +73,7 @@ pub fn init_global_logging() -> Result<(), String> {
         }
     }
 
-    // Log initialization success - FIXED: Use proper success code
+    // Log initialization success
     let event = events::LogEvent::success(
         codes::success::SYSTEM_INITIALIZATION_COMPLETED,
         "Global logging system initialized",
@@ -92,20 +107,26 @@ pub fn is_initialized() -> bool {
 // GLOBAL ACCESS
 // ============================================================================
 
-/// Get global logger (panics if not initialized)
-pub fn get_global_logger() -> &'static LoggingService {
+/// Get global logger (returns error if not initialized)
+///
+/// # Errors
+/// Returns `LoggingNotInitializedError` if `init_global_logging()` has not been called.
+pub fn get_global_logger() -> Result<&'static LoggingService, LoggingNotInitializedError> {
     GLOBAL_LOGGER
         .get()
-        .expect("Global logger not initialized. Call init_global_logging() first.")
-        .as_ref()
+        .map(|s| s.as_ref())
+        .ok_or(LoggingNotInitializedError)
 }
 
-/// Get global error collector (panics if not initialized)
-pub fn get_global_error_collector() -> &'static ErrorCollector {
+/// Get global error collector (returns error if not initialized)
+///
+/// # Errors
+/// Returns `LoggingNotInitializedError` if `init_global_logging()` has not been called.
+pub fn get_global_error_collector() -> Result<&'static ErrorCollector, LoggingNotInitializedError> {
     GLOBAL_ERROR_COLLECTOR
         .get()
-        .expect("Global error collector not initialized. Call init_global_logging() first.")
-        .as_ref()
+        .map(|c| c.as_ref())
+        .ok_or(LoggingNotInitializedError)
 }
 
 /// Safe access to global logger
@@ -161,10 +182,10 @@ pub fn get_current_file_context() -> Option<FileProcessingContext> {
 }
 
 // ============================================================================
-// MACRO SUPPORT FUNCTIONS - FIXED: Proper Code usage
+// MACRO SUPPORT FUNCTIONS
 // ============================================================================
 
-/// Log error with context (used by log_error! macro) - FIXED: Code parameter
+/// Log error with context (used by log_error! macro)
 pub fn log_error_with_context(
     code: Code,
     message: &str,
@@ -197,7 +218,7 @@ pub fn log_error_with_context(
     }
 }
 
-/// Log success with context (used by log_success! macro) - FIXED: Code parameter
+/// Log success with context (used by log_success! macro)
 pub fn log_success_with_context(code: Code, message: &str, context: Vec<(&str, &str)>) {
     let mut event = LogEvent::success(code, message);
 
@@ -215,7 +236,7 @@ pub fn log_success_with_context(code: Code, message: &str, context: Vec<(&str, &
     }
 }
 
-/// Log info with context (used by log_info! macro) - FIXED: No empty module parameter
+/// Log info with context (used by log_info! macro)
 pub fn log_info_with_context(message: &str, context: Vec<(&str, &str)>) {
     let mut event = LogEvent::info(message);
 
@@ -295,7 +316,7 @@ pub fn get_system_diagnostics() -> String {
 }
 
 // ============================================================================
-// SAFE FALLBACK LOGGING - FIXED: Code parameters
+// SAFE FALLBACK LOGGING
 // ============================================================================
 
 /// Safe error logging (won't panic if uninitialized)
@@ -318,6 +339,7 @@ pub fn safe_log_critical(code: Code, message: &str) {
     eprintln!("CRITICAL ERROR [{}]: {}", code.as_str(), message);
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

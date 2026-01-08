@@ -1,3 +1,11 @@
+//! ESP Compiler CLI
+//!
+//! Command-line interface for the ESP compilation pipeline.
+
+// Allow indexing in main.rs - CLI argument handling has reasonable guarantees
+// and the early length check ensures safe access patterns.
+#![allow(clippy::indexing_slicing)]
+
 use common::logging;
 use compiler::{batch, pipeline};
 use std::env;

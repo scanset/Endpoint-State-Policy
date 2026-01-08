@@ -2,7 +2,7 @@
 //!
 //! Provides a whitelisted command executor for Kubernetes compliance scanning.
 
-use agent_core::strategies::SystemCommandExecutor;
+use execution_engine::strategies::SystemCommandExecutor;
 use std::time::Duration;
 
 /// Create command executor configured for Kubernetes scanning

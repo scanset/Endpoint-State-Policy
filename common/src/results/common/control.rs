@@ -54,17 +54,23 @@ impl ControlMapping {
                 }
 
                 // Split on first colon only (control IDs might contain colons in theory)
-                let parts: Vec<&str> = pair.splitn(2, ':').collect();
+                let mut parts = pair.splitn(2, ':');
 
-                if parts.len() != 2 {
-                    return Err(ControlMappingError::InvalidFormat {
+                let framework = parts
+                    .next()
+                    .ok_or_else(|| ControlMappingError::InvalidFormat {
                         value: pair.to_string(),
                         reason: "Expected format FRAMEWORK:CONTROL_ID".to_string(),
-                    });
-                }
+                    })?
+                    .trim();
 
-                let framework = parts[0].trim();
-                let control_id = parts[1].trim();
+                let control_id = parts
+                    .next()
+                    .ok_or_else(|| ControlMappingError::InvalidFormat {
+                        value: pair.to_string(),
+                        reason: "Expected format FRAMEWORK:CONTROL_ID".to_string(),
+                    })?
+                    .trim();
 
                 if framework.is_empty() {
                     return Err(ControlMappingError::InvalidFormat {
@@ -135,6 +141,7 @@ impl std::fmt::Display for ControlMappingError {
 
 impl std::error::Error for ControlMappingError {}
 
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 #[cfg(test)]
 mod tests {
     use super::*;

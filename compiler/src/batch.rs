@@ -366,9 +366,19 @@ pub fn process_directory_sequential(
             );
         }
 
+        // Get file path as string, skip if not valid UTF-8
+        let Some(file_str) = file_path.to_str() else {
+            common::log_error!(
+                codes::file_processing::INVALID_PATH,
+                "File path is not valid UTF-8",
+                "file" => file_path.display()
+            );
+            continue;
+        };
+
         // Process with file context for automatic error collection
         let should_continue = logging::with_file_context(file_path.clone(), file_id, || {
-            match pipeline::process_file(file_path.to_str().unwrap()) {
+            match pipeline::process_file(file_str) {
                 Ok(pipeline_result) => {
                     results.add_success(file_path.clone(), pipeline_result);
 
@@ -508,21 +518,38 @@ fn process_chunk_parallel(
             break;
         }
 
-        let thread_files: Vec<PathBuf> = files[start_idx..end_idx].to_vec();
+        let thread_files: Vec<PathBuf> = files
+            .get(start_idx..end_idx)
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
         let results_clone = Arc::clone(&results);
 
         let handle = thread::spawn(move || {
             for (local_file_id, file_path) in thread_files.iter().enumerate() {
                 let global_file_id = start_idx + local_file_id;
 
+                // Get file path as string, skip if not valid UTF-8
+                let Some(file_str) = file_path.to_str() else {
+                    // Skip files with non-UTF8 paths
+                    continue;
+                };
+
                 logging::with_file_context(file_path.clone(), global_file_id, || {
-                    match pipeline::process_file(file_path.to_str().unwrap()) {
+                    match pipeline::process_file(file_str) {
                         Ok(pipeline_result) => {
-                            let mut results_guard = results_clone.lock().unwrap();
+                            // Gracefully handle poisoned mutex
+                            let Ok(mut results_guard) = results_clone.lock() else {
+                                // Mutex poisoned, skip this result
+                                return;
+                            };
                             results_guard.add_success(file_path.clone(), pipeline_result);
                         }
                         Err(pipeline_error) => {
-                            let mut results_guard = results_clone.lock().unwrap();
+                            // Gracefully handle poisoned mutex
+                            let Ok(mut results_guard) = results_clone.lock() else {
+                                // Mutex poisoned, skip this result
+                                return;
+                            };
                             results_guard.add_failure(file_path.clone(), pipeline_error);
                         }
                     }
@@ -546,7 +573,9 @@ fn process_chunk_parallel(
             message: "Failed to extract results from thread pool".to_string(),
         })?
         .into_inner()
-        .unwrap();
+        .map_err(|_| BatchError::ThreadError {
+            message: "Mutex was poisoned".to_string(),
+        })?;
 
     Ok(final_results)
 }
@@ -623,6 +652,12 @@ impl BatchInfo {
     }
 }
 
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,9 +3,9 @@
 //! This "collector" doesn't actually collect anything from the system.
 //! It's a pass-through that allows the executor to validate computed variables.
 
-use agent_core::execution::BehaviorHints;
-use agent_core::strategies::{CollectedData, CollectionError, CtnContract, CtnDataCollector};
-use agent_core::types::execution_context::ExecutableObject;
+use execution_engine::execution::BehaviorHints;
+use execution_engine::strategies::{CollectedData, CollectionError, CtnContract, CtnDataCollector};
+use execution_engine::types::execution_context::ExecutableObject;
 
 pub struct ComputedValuesCollector {
     id: String,
