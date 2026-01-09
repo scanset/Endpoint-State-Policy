@@ -2,6 +2,7 @@
 //!
 //! Collects Kubernetes resources via kubectl and returns as RecordData.
 
+use common::results::{CollectionMethod, CollectionMethodType};
 use execution_engine::execution::BehaviorHints;
 use execution_engine::strategies::{
     CollectedData, CollectionError, CtnContract, CtnDataCollector, SystemCommandExecutor,
@@ -154,6 +155,12 @@ impl K8sResourceCollector {
         args
     }
 
+    /// Build command string for traceability
+    fn build_command_string(&self, args: &[String]) -> String {
+        let kubectl_path = self.find_kubectl();
+        format!("{} {}", kubectl_path, args.join(" "))
+    }
+
     /// Execute kubectl and parse response
     fn execute_kubectl(
         &self,
@@ -294,6 +301,9 @@ impl CtnDataCollector for K8sResourceCollector {
             label_selector.as_deref(),
         );
 
+        // Build command string for traceability
+        let command_str = self.build_command_string(&args);
+
         let json_response = self.execute_kubectl(&args, timeout)?;
 
         // Count total resources
@@ -312,6 +322,43 @@ impl CtnDataCollector for K8sResourceCollector {
             "k8s_resource".to_string(),
             self.id.clone(),
         );
+
+        // Build target string for traceability
+        let target = format!(
+            "{}{}{}",
+            kind,
+            namespace
+                .as_ref()
+                .map(|n| format!(":{}", n))
+                .unwrap_or_default(),
+            label_selector
+                .as_ref()
+                .map(|l| format!(":{}", l))
+                .unwrap_or_default()
+        );
+
+        // Set collection method for traceability
+        let mut method_builder = CollectionMethod::builder()
+            .method_type(CollectionMethodType::Command)
+            .description("Query Kubernetes API for resources")
+            .target(&target)
+            .command(&command_str)
+            .input("kind", &kind);
+
+        if let Some(ref ns) = namespace {
+            method_builder = method_builder.input("namespace", ns);
+        }
+        if let Some(ref n) = name {
+            method_builder = method_builder.input("name", n);
+        }
+        if let Some(ref prefix) = name_prefix {
+            method_builder = method_builder.input("name_prefix", prefix);
+        }
+        if let Some(ref selector) = label_selector {
+            method_builder = method_builder.input("label_selector", selector);
+        }
+
+        data.set_method(method_builder.build());
 
         let found = resource.is_some();
         data.add_field("found".to_string(), ResolvedValue::Boolean(found));

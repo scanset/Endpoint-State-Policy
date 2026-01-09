@@ -1,6 +1,8 @@
 //! # File System Data Collector
 //!
 //! Collects file metadata (permissions, owner, group) and content for validation.
+
+use common::results::{CollectionMethod, CollectionMethodType};
 use execution_engine::execution::BehaviorHints;
 use execution_engine::strategies::{
     CollectedData, CollectionError, CollectionMode, CtnContract, CtnDataCollector,
@@ -57,6 +59,11 @@ impl FileSystemCollector {
             "file_metadata".to_string(),
             self.id.clone(),
         );
+
+        // Set collection method for traceability
+        let method =
+            CollectionMethod::file_stat(path).with_description("Query file metadata via stat()");
+        data.set_method(method);
 
         let path_obj = Path::new(path);
 
@@ -163,6 +170,10 @@ impl FileSystemCollector {
             self.id.clone(),
         );
 
+        // Set collection method for traceability
+        let method = CollectionMethod::file_read(path).with_description("Read file contents");
+        data.set_method(method);
+
         let path_obj = Path::new(path);
 
         // Check existence
@@ -201,7 +212,6 @@ impl FileSystemCollector {
         Ok(data)
     }
 
-    /// Collect JSON file as RecordData/// Collect JSON file as RecordData
     /// Collect JSON file as RecordData
     fn collect_json_record(
         &self,
@@ -213,6 +223,10 @@ impl FileSystemCollector {
             "json_record".to_string(),
             self.id.clone(),
         );
+
+        // Set collection method for traceability
+        let method = CollectionMethod::file_read(path).with_description("Read and parse JSON file");
+        data.set_method(method);
 
         let path_obj = Path::new(path);
 
@@ -234,7 +248,7 @@ impl FileSystemCollector {
             }
         };
 
-        // Parse JSON - FIXED: Use from_json_value instead of from_json_str
+        // Parse JSON
         let json_value: serde_json::Value =
             serde_json::from_str(&content).map_err(|e| CollectionError::CollectionFailed {
                 object_id: object_id.to_string(),
@@ -267,6 +281,17 @@ impl FileSystemCollector {
             "file_content".to_string(),
             self.id.clone(),
         );
+
+        // Set collection method for traceability
+        let method = CollectionMethod::builder()
+            .method_type(CollectionMethodType::FileRead)
+            .description("Recursive directory scan")
+            .target(base_path)
+            .input("max_depth", max_depth.to_string())
+            .input("include_hidden", include_hidden.to_string())
+            .input("follow_symlinks", follow_symlinks.to_string())
+            .build();
+        data.set_method(method);
 
         let base = Path::new(base_path);
 
@@ -429,7 +454,7 @@ impl CtnDataCollector for FileSystemCollector {
                     );
                 }
 
-                // ADD THIS LINE - default content collection:
+                // Default content collection
                 self.collect_content(&path, &object.identifier)
             }
             _ => Err(CollectionError::UnsupportedCollectionMode {

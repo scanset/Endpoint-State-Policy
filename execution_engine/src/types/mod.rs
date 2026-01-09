@@ -25,9 +25,12 @@ pub mod resolution_context;
 // Record traits (may be redundant with state.rs extensions)
 pub mod record_traits;
 
-// Add this line:
+// Field path extensions
 pub mod field_path_extensions;
 pub use field_path_extensions::*;
+
+// Execution manifest types (new)
+pub mod manifest;
 
 // ============================================================================
 // RE-EXPORTS FROM COMMON CRATE - Types scanner uses directly
@@ -90,6 +93,9 @@ pub use resolution_context::*; // ResolutionContext
 
 // Record traits
 pub use record_traits::*;
+
+// Manifest types (new)
+pub use manifest::{CtnResult, ExecutionManifest, TreeResult, TreeStats};
 
 // ============================================================================
 // TYPE ALIASES

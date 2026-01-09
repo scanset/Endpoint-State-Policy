@@ -2,13 +2,14 @@
 # Tests TCP port listening state
 
 META
-    esp_scan_id `test-tcp-listener-001`
+    esp_id `test-tcp-listener-001`
+    version `1.0.0`
+    dsl_schema_version `1.0.0`
     platform `linux`
     criticality `medium`
     control_mapping `CIS:3.4.1,NIST-800-53:CM-7`
     title `Network Service Port Validation`
     description `Validates expected TCP listeners and ensures prohibited ports are not listening`
-    version `1.0.0`
     author `security-team`
     tags `network,tcp,ports,services`
 META_END

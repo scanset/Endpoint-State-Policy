@@ -3,7 +3,7 @@ resolver = "2"
 members = ["common", "compiler", "execution_engine", "contract_kit", "agent"]
 
 [workspace.package]
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Curtis Slone <curtis@scanset.io>"]
 license = "MIT OR Apache-2.0"

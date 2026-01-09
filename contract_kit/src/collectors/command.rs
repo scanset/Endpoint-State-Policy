@@ -5,6 +5,8 @@
 //! - Systemd service status
 //! - Sysctl kernel parameters
 //! - SELinux enforcement mode
+
+use common::results::{CollectionMethod, CollectionMethodType};
 use execution_engine::execution::BehaviorHints;
 use execution_engine::strategies::{
     CollectedData, CollectionError, CtnContract, CtnDataCollector, SystemCommandExecutor,
@@ -69,6 +71,9 @@ impl CommandCollector {
             .get_parameter_as_int("timeout")
             .map(|t| std::time::Duration::from_secs(t as u64));
 
+        // Build the command string
+        let command_str = format!("rpm -q {}", package_name);
+
         // Execute rpm query with optional timeout
         let output = self
             .executor
@@ -83,6 +88,16 @@ impl CommandCollector {
             "rpm_package".to_string(),
             self.id.clone(),
         );
+
+        // Set collection method for traceability
+        let method = CollectionMethod::builder()
+            .method_type(CollectionMethodType::Command)
+            .description("Query RPM package information")
+            .target(&package_name)
+            .command(&command_str)
+            .input("package_name", &package_name)
+            .build();
+        data.set_method(method);
 
         // Store package name
         data.add_field(
@@ -122,6 +137,19 @@ impl CommandCollector {
             "systemd_service".to_string(),
             self.id.clone(),
         );
+
+        // Set collection method for traceability
+        let method = CollectionMethod::builder()
+            .method_type(CollectionMethodType::Command)
+            .description("Query systemd service status")
+            .target(&service_name)
+            .command(format!(
+                "systemctl is-active {}; systemctl is-enabled {}",
+                service_name, service_name
+            ))
+            .input("service_name", &service_name)
+            .build();
+        data.set_method(method);
 
         data.add_field(
             "service_name".to_string(),
@@ -175,11 +203,24 @@ impl CommandCollector {
             .get_parameter_as_int("timeout")
             .map(|t| std::time::Duration::from_secs(t as u64));
 
+        // Build command string
+        let command_str = format!("sysctl -n {}", parameter_name);
+
         let mut data = CollectedData::new(
             object.identifier.clone(),
             "sysctl_parameter".to_string(),
             self.id.clone(),
         );
+
+        // Set collection method for traceability
+        let method = CollectionMethod::builder()
+            .method_type(CollectionMethodType::Command)
+            .description("Query kernel sysctl parameter")
+            .target(&parameter_name)
+            .command(&command_str)
+            .input("parameter_name", &parameter_name)
+            .build();
+        data.set_method(method);
 
         data.add_field(
             "parameter_name".to_string(),
@@ -225,6 +266,15 @@ impl CommandCollector {
             "selinux_status".to_string(),
             self.id.clone(),
         );
+
+        // Set collection method for traceability
+        let method = CollectionMethod::builder()
+            .method_type(CollectionMethodType::Command)
+            .description("Query SELinux enforcement status")
+            .target("selinux")
+            .command("getenforce")
+            .build();
+        data.set_method(method);
 
         // Execute getenforce
         let output = self
@@ -351,6 +401,17 @@ impl CtnDataCollector for CommandCollector {
                         "rpm_package".to_string(),
                         self.id.clone(),
                     );
+
+                    // Set collection method for batch operation
+                    let method = CollectionMethod::builder()
+                        .method_type(CollectionMethodType::Command)
+                        .description("Batch query RPM packages")
+                        .target(&package_name)
+                        .command("rpm -qa")
+                        .input("package_name", &package_name)
+                        .input("batch_mode", "true")
+                        .build();
+                    data.set_method(method);
 
                     data.add_field(
                         "package_name".to_string(),

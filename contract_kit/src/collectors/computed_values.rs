@@ -3,6 +3,7 @@
 //! This "collector" doesn't actually collect anything from the system.
 //! It's a pass-through that allows the executor to validate computed variables.
 
+use common::results::CollectionMethod;
 use execution_engine::execution::BehaviorHints;
 use execution_engine::strategies::{CollectedData, CollectionError, CtnContract, CtnDataCollector};
 use execution_engine::types::execution_context::ExecutableObject;
@@ -34,11 +35,16 @@ impl CtnDataCollector for ComputedValuesCollector {
     ) -> Result<CollectedData, CollectionError> {
         // Create empty CollectedData - we're not collecting anything
         // The executor will look in resolved_variables instead
-        let data = CollectedData::new(
+        let mut data = CollectedData::new(
             object.identifier.clone(),
             "computed_values".to_string(),
             self.id.clone(),
         );
+
+        // Set collection method for traceability - marks this as computed/derived
+        let method = CollectionMethod::computed()
+            .with_description("Computed value - no actual system collection performed");
+        data.set_method(method);
 
         // No fields to add - validation happens against variables, not collected data
         Ok(data)

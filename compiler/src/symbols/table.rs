@@ -34,7 +34,7 @@ impl RelationshipType {
             RelationshipType::SetReference => "set_reference",
             RelationshipType::FilterDependency => "filter_dependency",
             RelationshipType::RunOperationInput => "run_operation_input",
-            RelationshipType::RunOperationTarget => "RunOperationTarget",
+            RelationshipType::RunOperationTarget => "run_operation_target",
         }
     }
 }
@@ -202,7 +202,7 @@ impl GlobalSymbolTable {
             || self.states.contains_key(identifier)
             || self.objects.contains_key(identifier)
             || self.sets.contains_key(identifier)
-            || self.runtime_operations.contains_key(identifier) // NEW
+            || self.runtime_operations.contains_key(identifier)
     }
 
     pub fn total_count(&self) -> usize {
@@ -210,7 +210,7 @@ impl GlobalSymbolTable {
             + self.states.len()
             + self.objects.len()
             + self.sets.len()
-            + self.runtime_operations.len() // NEW
+            + self.runtime_operations.len()
     }
 
     /// Check if adding a new symbol would exceed limits
@@ -230,22 +230,29 @@ impl GlobalSymbolTable {
         Ok(())
     }
 
+    /// Check for duplicate identifier across all global symbol types
+    /// Returns the span of the existing symbol if found
     pub fn check_duplicate(&self, identifier: &str) -> Option<Span> {
+        self.check_shadows(identifier).map(|(_, span)| span)
+    }
+
+    /// Check if identifier exists as global symbol (for shadowing detection)
+    /// Returns (type_name, span) if found
+    pub fn check_shadows(&self, identifier: &str) -> Option<(&'static str, Span)> {
         if let Some(var) = self.variables.get(identifier) {
-            return Some(var.declaration_span);
+            return Some(("variable", var.declaration_span));
         }
         if let Some(state) = self.states.get(identifier) {
-            return Some(state.declaration_span);
+            return Some(("state", state.declaration_span));
         }
         if let Some(object) = self.objects.get(identifier) {
-            return Some(object.declaration_span);
+            return Some(("object", object.declaration_span));
         }
         if let Some(set) = self.sets.get(identifier) {
-            return Some(set.declaration_span);
+            return Some(("set", set.declaration_span));
         }
         if let Some(runtime_op) = self.runtime_operations.get(identifier) {
-            // NEW
-            return Some(runtime_op.declaration_span);
+            return Some(("runtime_operation", runtime_op.declaration_span));
         }
         None
     }
@@ -826,7 +833,7 @@ impl SymbolTableBuilder {
         Ok(())
     }
 
-    /// Add local state with validation and bounds checking
+    /// Add local state with validation, bounds checking, and shadowing check (N-5)
     pub fn add_local_state(
         &mut self,
         identifier: String,
@@ -836,6 +843,28 @@ impl SymbolTableBuilder {
         let ctn_id = self.current_ctn_id.ok_or_else(|| {
             SymbolDiscoveryError::internal_symbol_error("Cannot add local symbol: not in CTN scope")
         })?;
+
+        // Check for shadowing (N-5): local symbol cannot shadow global symbol
+        if let Some((global_type, global_span)) =
+            self.result.global_symbols.check_shadows(&identifier)
+        {
+            let ctn_type = self
+                .result
+                .local_symbol_tables
+                .iter()
+                .find(|t| t.ctn_node_id == ctn_id)
+                .map(|t| t.ctn_type.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            return Err(SymbolDiscoveryError::shadowing(
+                &identifier,
+                "state",
+                global_type,
+                &ctn_type,
+                span,
+                global_span,
+            ));
+        }
 
         let local_table = self
             .result
@@ -881,7 +910,7 @@ impl SymbolTableBuilder {
         Ok(())
     }
 
-    /// Add local object with validation and bounds checking
+    /// Add local object with validation, bounds checking, and shadowing check (N-5)
     pub fn add_local_object(
         &mut self,
         identifier: String,
@@ -891,6 +920,28 @@ impl SymbolTableBuilder {
         let ctn_id = self.current_ctn_id.ok_or_else(|| {
             SymbolDiscoveryError::internal_symbol_error("Cannot add local symbol: not in CTN scope")
         })?;
+
+        // Check for shadowing (N-5): local symbol cannot shadow global symbol
+        if let Some((global_type, global_span)) =
+            self.result.global_symbols.check_shadows(&identifier)
+        {
+            let ctn_type = self
+                .result
+                .local_symbol_tables
+                .iter()
+                .find(|t| t.ctn_node_id == ctn_id)
+                .map(|t| t.ctn_type.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            return Err(SymbolDiscoveryError::shadowing(
+                &identifier,
+                "object",
+                global_type,
+                &ctn_type,
+                span,
+                global_span,
+            ));
+        }
 
         let local_table = self
             .result

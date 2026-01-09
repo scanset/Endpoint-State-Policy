@@ -2,13 +2,14 @@
 # Tests file content using contains, pattern_match, and other string operations
 
 META
-    esp_scan_id `test-file-content-001`
+    esp_id `test-file-content-001`
+    version `1.0.0`
+    dsl_schema_version `1.0.0`
     platform `linux`
     criticality `medium`
     control_mapping `CIS:5.4.1,NIST-800-53:AC-2`
     title `System Account Configuration Validation`
     description `Validates critical system file content for security compliance`
-    version `1.0.0`
     author `security-team`
     tags `file-content,linux,accounts`
 META_END

@@ -249,7 +249,7 @@ See [contract_kit/docs/](contract_kit/docs/) for complete CTN type reference.
 | [ESP Language Guide](docs/ESP_Language_Guide.md) | Complete language reference |
 | [EBNF Grammar](docs/EBNF.md) | Formal grammar specification |
 | [Trust Model](docs/Trust_Model.md) | Security boundaries and guarantees |
-| [Scanner Development Guide](docs/Scanner_Development_Guide.md) | Building custom CTN types |
+| [Contract Development Guide](docs/Contract_Development_Guide.md) | Building custom CTN types |
 | [CTN Type Reference](contract_kit/docs/) | Collector/executor documentation |
 
 ---

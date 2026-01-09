@@ -66,8 +66,11 @@ pub use common::ast::nodes::EspFile;
 // Metadata
 pub use common::metadata::MetaDataBlock;
 
-// Execution result
+// Execution result (legacy type for backwards compatibility)
 pub use execution_engine::execution::engine::PolicyExecutionResult as ScanResult;
+
+// New manifest type for advanced usage
+pub use execution_engine::types::ExecutionManifest;
 
 // Logging utilities (optional, for users who want logging)
 pub use common::logging;
@@ -174,6 +177,33 @@ pub fn scan_file<P: AsRef<Path>>(
     scan_ast(&pipeline_result.ast, registry)
 }
 
+/// Scan an ESP file and return the raw execution manifest.
+///
+/// This is the advanced entry point that returns the full `ExecutionManifest`
+/// instead of the legacy `ScanResult`. Use this when you need access to all
+/// execution data for custom output formatting.
+///
+/// # Arguments
+/// * `path` - Path to the ESP file
+/// * `registry` - Strategy registry with scanner implementations
+///
+/// # Returns
+/// * `Ok(ExecutionManifest)` - The complete execution data
+/// * `Err(ScanError)` - The scan could not be completed
+pub fn scan_file_manifest<P: AsRef<Path>>(
+    path: P,
+    registry: Arc<CtnStrategyRegistry>,
+) -> Result<ExecutionManifest, ScanError> {
+    let path_str = path.as_ref().display().to_string();
+
+    // Phase 1: Compile
+    let pipeline_result = pipeline::process_file(&path_str)
+        .map_err(|e| ScanError::CompilationFailed(e.to_string()))?;
+
+    // Phase 2-4: Execute using the AST
+    scan_ast_manifest(&pipeline_result.ast, registry)
+}
+
 /// Scan a pre-compiled ESP AST and return the result.
 ///
 /// Use this when you already have a compiled AST (e.g., from a gRPC service
@@ -197,6 +227,27 @@ pub fn scan_ast(
     ast: &EspFile,
     registry: Arc<CtnStrategyRegistry>,
 ) -> Result<ScanResult, ScanError> {
+    // Get the manifest and convert to legacy result type
+    let manifest = scan_ast_manifest(ast, registry)?;
+    Ok(manifest.into())
+}
+
+/// Scan a pre-compiled ESP AST and return the raw execution manifest.
+///
+/// This is the advanced entry point that returns the full `ExecutionManifest`.
+/// Use this when you need access to all execution data for custom output formatting.
+///
+/// # Arguments
+/// * `ast` - The compiled ESP AST
+/// * `registry` - Strategy registry with scanner implementations
+///
+/// # Returns
+/// * `Ok(ExecutionManifest)` - The complete execution data
+/// * `Err(ScanError)` - The scan could not be completed
+pub fn scan_ast_manifest(
+    ast: &EspFile,
+    registry: Arc<CtnStrategyRegistry>,
+) -> Result<ExecutionManifest, ScanError> {
     // Phase 2: Convert AST to scanner types
     let (variables, states, objects, runtime_operations, sets, criteria_root, metadata) =
         convert_ast_to_scanner_types(ast)?;
@@ -219,11 +270,11 @@ pub fn scan_ast(
 
     // Phase 4: Execute scan
     let mut engine = ExecutionEngine::new(execution_context, registry);
-    let result = engine
+    let manifest = engine
         .execute()
         .map_err(|e| ScanError::ExecutionFailed(e.to_string()))?;
 
-    Ok(result)
+    Ok(manifest)
 }
 
 /// Scan an ESP file with logging enabled.
@@ -307,7 +358,7 @@ pub fn scan_file_with_logging<P: AsRef<Path>>(
     // Phase 4: Execute
     log_info!("Phase 4: Executing compliance scan");
     let mut engine = ExecutionEngine::new(execution_context, registry);
-    let result = engine.execute().map_err(|e| {
+    let manifest = engine.execute().map_err(|e| {
         log_error!(
             common::logging::codes::system::INTERNAL_ERROR,
             "Scan execution failed",
@@ -315,6 +366,9 @@ pub fn scan_file_with_logging<P: AsRef<Path>>(
         );
         ScanError::ExecutionFailed(e.to_string())
     })?;
+
+    // Convert to legacy result for logging and return
+    let result: ScanResult = manifest.into();
 
     if result.tree_passed {
         log_success!(

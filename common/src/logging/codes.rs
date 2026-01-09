@@ -163,6 +163,7 @@ pub mod symbols {
     pub const SYMBOL_DISCOVERY_ERROR: Code = Code::new("E051");
     pub const SYMBOL_TABLE_CONSTRUCTION_ERROR: Code = Code::new("E081");
     pub const DUPLICATE_SYMBOL: Code = Code::new("E090");
+    pub const SYMBOL_SHADOWING: Code = Code::new("E091"); // NEW
     pub const MULTIPLE_LOCAL_OBJECTS: Code = Code::new("E094");
     pub const SYMBOL_SCOPE_VALIDATION_ERROR: Code = Code::new("E095");
 }
@@ -195,6 +196,8 @@ pub mod structural {
     pub const COMPLEXITY_VIOLATION: Code = Code::new("E243");
     pub const CONSISTENCY_VIOLATION: Code = Code::new("E244");
     pub const MULTIPLE_STRUCTURAL_ERRORS: Code = Code::new("E245");
+    pub const MISSING_METADATA: Code = Code::new("E246");
+    pub const METADATA_VALIDATION_ERROR: Code = Code::new("E247");
 }
 
 /// Consumer integration error codes
@@ -298,6 +301,7 @@ pub mod success {
     pub const BLOCK_ORDERING_PASSED: Code = Code::new("I082");
     pub const LIMITS_CHECK_PASSED: Code = Code::new("I083");
     pub const REQUIREMENTS_CHECK_PASSED: Code = Code::new("I084");
+    pub const METADATA_VALIDATION_PASSED: Code = Code::new("I085");
 }
 
 // ============================================================================
@@ -1204,6 +1208,62 @@ fn get_error_registry() -> &'static HashMap<&'static str, ErrorMetadata> {
                 false,
                 "Execution context building completed successfully",
                 "FFI transformation ready for serialization",
+            ),
+        );
+
+        // In get_error_registry(), after the E090 entry:
+
+        registry.insert(
+            "E091",
+            ErrorMetadata::new(
+                "E091",
+                "Symbols",
+                Severity::Medium,
+                true,  // recoverable
+                false, // doesn't require halt
+                "Local symbol shadows global symbol with same identifier",
+                "Use unique identifier for local symbol or reference the global symbol directly",
+            ),
+        );
+
+        //Metadata validation error codes
+        registry.insert(
+            "E246",
+            ErrorMetadata::new(
+                "E246",
+                "StructuralValidation",
+                Severity::High,
+                true,  // recoverable
+                false, // doesn't require halt
+                "Missing META block - required for v1.0.0 compliance",
+                "Add META block with required fields: esp_id, version, dsl_schema_version, platform, criticality, control_mapping, title",
+            ),
+        );
+
+        registry.insert(
+            "E247",
+            ErrorMetadata::new(
+                "E247",
+                "StructuralValidation",
+                Severity::Medium,
+                true,  // recoverable
+                false, // doesn't require halt
+                "META block validation error - field missing or invalid",
+                "Check META block fields for v1.0.0 compliance: verify required fields are present and values are valid",
+            ),
+        );
+
+        // Success code for metadata validation
+        registry.insert(
+            "I085",
+            ErrorMetadata::new(
+                "I085",
+                "StructuralValidation",
+                Severity::Low,
+                true,
+                false,
+                "META block validation completed successfully",
+                "Continue to next validation phase",
             ),
         );
 

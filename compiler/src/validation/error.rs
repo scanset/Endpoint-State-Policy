@@ -53,6 +53,15 @@ pub enum StructuralError {
     /// Structural consistency violation
     #[error("Structural consistency violation: {inconsistency} detected at {span}")]
     ConsistencyViolation { inconsistency: String, span: Span },
+
+    // === NEW: Metadata validation errors (v1.0.0) ===
+    /// Missing META block (required for v1.0.0)
+    #[error("Missing META block: META block is required for v1.0.0 compliance")]
+    MissingMetadata,
+
+    /// META field validation error
+    #[error("META validation error: {message}")]
+    MetadataValidation { message: String, span: Option<Span> },
 }
 
 impl StructuralError {
@@ -118,6 +127,21 @@ impl StructuralError {
         }
     }
 
+    // === NEW: Metadata error constructors ===
+
+    /// Create missing metadata error
+    pub fn missing_metadata() -> Self {
+        Self::MissingMetadata
+    }
+
+    /// Create metadata validation error
+    pub fn metadata_validation(message: impl Into<String>, span: Option<Span>) -> Self {
+        Self::MetadataValidation {
+            message: message.into(),
+            span,
+        }
+    }
+
     /// Get error span if available
     pub fn span(&self) -> Option<Span> {
         match self {
@@ -126,14 +150,16 @@ impl StructuralError {
             | Self::EmptyDefinition { span }
             | Self::EmptyCriteria { span }
             | Self::ConsistencyViolation { span, .. } => Some(*span),
+            Self::MetadataValidation { span, .. } => *span,
             Self::ImplementationLimitExceeded { .. }
             | Self::InternalError { .. }
-            | Self::ComplexityViolation { .. } => None,
+            | Self::ComplexityViolation { .. }
+            | Self::MissingMetadata => None,
         }
     }
 
     /// Get appropriate error code for logging system
-    pub fn error_code(&self) -> common::logging::codes::Code {
+    pub fn error_code(&self) -> codes::Code {
         match self {
             Self::MissingRequiredComponent { .. } => {
                 codes::structural::INCOMPLETE_DEFINITION_STRUCTURE
@@ -147,6 +173,9 @@ impl StructuralError {
             Self::InternalError { .. } => codes::system::INTERNAL_ERROR,
             Self::ComplexityViolation { .. } => codes::structural::COMPLEXITY_VIOLATION,
             Self::ConsistencyViolation { .. } => codes::structural::CONSISTENCY_VIOLATION,
+            // NEW
+            Self::MissingMetadata => codes::structural::MISSING_METADATA,
+            Self::MetadataValidation { .. } => codes::structural::METADATA_VALIDATION_ERROR,
         }
     }
 
@@ -176,6 +205,9 @@ impl StructuralError {
             Self::InternalError { .. } => "InternalError",
             Self::ComplexityViolation { .. } => "ComplexityViolation",
             Self::ConsistencyViolation { .. } => "ConsistencyViolation",
+            // NEW
+            Self::MissingMetadata => "MissingMetadata",
+            Self::MetadataValidation { .. } => "MetadataValidation",
         }
     }
 
@@ -198,6 +230,9 @@ impl StructuralError {
             | Self::BlockOrderingViolation { .. }
             | Self::ConsistencyViolation { .. } => "Medium",
             Self::EmptyCriteria { .. } | Self::ComplexityViolation { .. } => "Low",
+            // NEW
+            Self::MissingMetadata => "High",
+            Self::MetadataValidation { .. } => "Medium",
         }
     }
 
@@ -218,6 +253,9 @@ impl StructuralError {
             Self::InternalError { .. } => "Contact system administrator or file bug report",
             Self::ComplexityViolation { .. } => "Simplify structure to reduce complexity",
             Self::ConsistencyViolation { .. } => "Fix structural inconsistency",
+            // NEW
+            Self::MissingMetadata => "Add META block with required v1.0.0 fields",
+            Self::MetadataValidation { .. } => "Fix META block field values to comply with v1.0.0",
         }
     }
 }

@@ -1,4 +1,4 @@
-# Scanner Development Guide
+# Contract Development Guide
 
 A complete guide for implementing custom compliance scanners using the ESP framework.
 
@@ -13,7 +13,7 @@ A complete guide for implementing custom compliance scanners using the ESP frame
 5. [Creating a CTN Contract](#creating-a-ctn-contract)
 6. [Implementing a Collector](#implementing-a-collector)
 7. [Implementing an Executor](#implementing-an-executor)
-8. [Registering Your Scanner](#registering-your-scanner)
+8. [Registering Your Contract](#registering-your-contract)
 9. [Command Execution](#command-execution)
 10. [Advanced Features](#advanced-features)
 11. [Testing](#testing)

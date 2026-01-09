@@ -10,8 +10,19 @@ description = "Common types and utilities shared across ESP crates"
 
 [features]
 default = ["attestation"]
+
+# CUI-free attestations safe for network transport
+# Includes: PolicyOutcome, CheckAttestation, EvidenceSummary (hash only)
 attestation = []
+
+# Full results with CUI (findings + evidence)
+# Includes: PolicyResult, ComplianceFinding, Evidence (actual values)
 full-results = []
+
+# Assessor-grade evidence traceability
+# Includes: CollectionMethod with command and inputs fields
+# Requires full-results as evidence context is needed
+assessor-evidence = ["full-results"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

@@ -74,19 +74,5 @@ impl From<HashingError> for ResultError {
     }
 }
 
-#[cfg(feature = "attestation")]
-impl From<super::attestation::AttestationBuildError> for ResultError {
-    fn from(err: super::attestation::AttestationBuildError) -> Self {
-        ResultError::BuildError(err.to_string())
-    }
-}
-
-#[cfg(feature = "full-results")]
-impl From<super::full::FullResultBuildError> for ResultError {
-    fn from(err: super::full::FullResultBuildError) -> Self {
-        ResultError::BuildError(err.to_string())
-    }
-}
-
 // Legacy error type alias for backwards compatibility
 pub type ResultGenerationError = ResultError;

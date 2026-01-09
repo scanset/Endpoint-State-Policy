@@ -17,7 +17,7 @@ pub use error::{ReferenceValidationError, ValidationResult};
 pub use types::{ReferenceValidationResult, SecurityComplianceInfo, ValidationStats};
 
 /// Module constants
-pub const VERSION: &str = "2.0.0";
+pub const VERSION: &str = "1.0.0";
 pub const PASS_NUMBER: u8 = 4;
 
 /// Main entry point for reference validation with SSDF-compliant security boundaries

@@ -11,7 +11,7 @@ use crate::strategies::errors::{CollectionError, CtnExecutionError, ValidationRe
 use crate::types::common::ResolvedValue;
 use crate::types::execution_context::{ExecutableCriterion, ExecutableObject};
 use crate::types::{ExistenceCheck, ItemCheck, StateJoinOp};
-use common::results::Outcome;
+use common::results::{CollectionMethod, Outcome};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
@@ -191,6 +191,7 @@ pub struct CollectedData {
     pub metadata: CollectionMetadata,
 }
 
+/// Metadata about the collection operation
 #[derive(Debug, Clone)]
 pub struct CollectionMetadata {
     /// Collector that gathered this data
@@ -210,6 +211,13 @@ pub struct CollectionMetadata {
 
     /// Collection warnings or notes
     pub warnings: Vec<String>,
+
+    /// Collection method details for assessor traceability
+    ///
+    /// Documents exactly how evidence was collected, including method type,
+    /// target resource, and optionally the exact command or API call and
+    /// input parameters (when assessor-evidence feature is enabled in common).
+    pub method: Option<CollectionMethod>,
 }
 
 impl CollectedData {
@@ -226,6 +234,7 @@ impl CollectedData {
                 collection_duration: Duration::from_millis(0),
                 platform_specific: None,
                 warnings: Vec::new(),
+                method: None,
             },
         }
     }
@@ -260,6 +269,16 @@ impl CollectedData {
         self.metadata.collection_mode = mode;
     }
 
+    /// Set collection method for assessor traceability
+    pub fn set_method(&mut self, method: CollectionMethod) {
+        self.metadata.method = Some(method);
+    }
+
+    /// Check if collection method is recorded
+    pub fn has_method(&self) -> bool {
+        self.metadata.method.is_some()
+    }
+
     /// Get all field names
     pub fn field_names(&self) -> Vec<&String> {
         self.fields.keys().collect()
@@ -278,16 +297,36 @@ impl CollectedData {
             .map(|(k, v)| (k.clone(), resolved_value_to_json(v)))
             .collect();
 
+        let mut metadata_map = serde_json::Map::new();
+        metadata_map.insert(
+            "collector_id".to_string(),
+            serde_json::Value::String(self.metadata.collector_id.clone()),
+        );
+        metadata_map.insert(
+            "collection_mode".to_string(),
+            serde_json::Value::String(self.metadata.collection_mode.clone()),
+        );
+        metadata_map.insert(
+            "collection_duration_ms".to_string(),
+            serde_json::json!(self.metadata.collection_duration.as_millis() as u64),
+        );
+        metadata_map.insert(
+            "warnings".to_string(),
+            serde_json::json!(self.metadata.warnings),
+        );
+
+        // Add method if present
+        if let Some(ref method) = self.metadata.method {
+            if let Ok(method_json) = serde_json::to_value(method) {
+                metadata_map.insert("method".to_string(), method_json);
+            }
+        }
+
         serde_json::json!({
             "object_id": self.object_id,
             "ctn_type": self.ctn_type,
             "fields": fields,
-            "metadata": {
-                "collector_id": self.metadata.collector_id,
-                "collection_mode": self.metadata.collection_mode,
-                "collection_duration_ms": self.metadata.collection_duration.as_millis() as u64,
-                "warnings": self.metadata.warnings,
-            }
+            "metadata": serde_json::Value::Object(metadata_map)
         })
     }
 
@@ -537,6 +576,11 @@ impl CtnExecutionResult {
                 collection_duration_ms: data.metadata.collection_duration.as_millis() as u64,
                 field_count: data.fields.len(),
                 has_warnings: !data.metadata.warnings.is_empty(),
+                method_type: data
+                    .metadata
+                    .method
+                    .as_ref()
+                    .map(|m| m.method_type.to_string()),
             })
             .collect()
     }
@@ -552,6 +596,8 @@ pub struct CollectionMetadataSummary {
     pub collection_duration_ms: u64,
     pub field_count: usize,
     pub has_warnings: bool,
+    /// Method type used for collection (without sensitive details)
+    pub method_type: Option<String>,
 }
 
 impl Default for ExecutionMetadata {

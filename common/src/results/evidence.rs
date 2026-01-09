@@ -10,6 +10,7 @@
 //! Evidence
 //! ├── data                - Collected field values by object ID
 //! ├── collection_metadata - Information about how data was collected
+//! │   └── method          - CollectionMethod (assessor traceability)
 //! └── collected_at        - Timestamp when evidence was gathered
 //! ```
 //!
@@ -17,9 +18,12 @@
 //!
 //! - **Attestations**: Include `evidence_hash` (SHA-256 of evidence), not actual data
 //! - **Full Results**: Include complete `Evidence` structure with all collected values
+//! - **Assessor Evidence**: Include `CollectionMethod` with command/input details
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use super::collection_method::CollectionMethod;
 
 // ============================================================================
 // Evidence
@@ -140,6 +144,14 @@ pub struct CollectionRecord {
     /// Warning messages (if any)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+
+    /// Collection method details for assessor traceability
+    ///
+    /// Contains information about exactly how the evidence was gathered,
+    /// including the method type, target, and (with `assessor-evidence` feature)
+    /// the exact command and input parameters used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<CollectionMethod>,
 }
 
 impl CollectionRecord {
@@ -158,6 +170,7 @@ impl CollectionRecord {
             field_count: 0,
             has_warnings: false,
             warnings: Vec::new(),
+            method: None,
         }
     }
 
@@ -184,6 +197,17 @@ impl CollectionRecord {
         self.has_warnings = !warnings.is_empty();
         self.warnings = warnings;
         self
+    }
+
+    /// Set collection method for assessor traceability
+    pub fn with_method(mut self, method: CollectionMethod) -> Self {
+        self.method = Some(method);
+        self
+    }
+
+    /// Check if this record has collection method details
+    pub fn has_method(&self) -> bool {
+        self.method.is_some()
     }
 }
 
@@ -254,6 +278,13 @@ pub struct CollectionSummary {
 
     /// Whether there were warnings
     pub has_warnings: bool,
+
+    /// Collection method type (if available)
+    ///
+    /// Provides the method type without sensitive details.
+    /// Full method details are only in CollectionRecord with assessor-evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method_type: Option<String>,
 }
 
 impl CollectionSummary {
@@ -265,6 +296,7 @@ impl CollectionSummary {
             collector_id: record.collector_id.clone(),
             duration_ms: record.duration_ms,
             has_warnings: record.has_warnings,
+            method_type: record.method.as_ref().map(|m| m.method_type.to_string()),
         }
     }
 }
@@ -302,10 +334,16 @@ fn current_timestamp() -> String {
 // ============================================================================
 // Tests
 // ============================================================================
-#[allow(clippy::unwrap_used)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::results::collection_method::CollectionMethodType;
 
     #[test]
     fn test_evidence_new() {
@@ -381,6 +419,20 @@ mod tests {
         assert_eq!(record.field_count, 6);
         assert!(record.has_warnings);
         assert_eq!(record.warnings.len(), 1);
+        assert!(!record.has_method());
+    }
+
+    #[test]
+    fn test_collection_record_with_method() {
+        let method = CollectionMethod::command("Run stat command", "/etc/passwd");
+
+        let record =
+            CollectionRecord::new("file_obj", "file_metadata", "fs_collector").with_method(method);
+
+        assert!(record.has_method());
+        let method = record.method.unwrap();
+        assert_eq!(method.method_type, CollectionMethodType::Command);
+        assert_eq!(method.target, Some("/etc/passwd".to_string()));
     }
 
     #[test]
@@ -401,7 +453,9 @@ mod tests {
         );
 
         evidence.add_collection_record(
-            CollectionRecord::new("obj1", "service", "collector1").with_duration_ms(10),
+            CollectionRecord::new("obj1", "service", "collector1")
+                .with_duration_ms(10)
+                .with_method(CollectionMethod::command("Query service", "svc1")),
         );
         evidence.add_collection_record(
             CollectionRecord::new("obj2", "file", "collector2").with_duration_ms(20),
@@ -413,13 +467,23 @@ mod tests {
         assert_eq!(summary.total_fields, 3); // 2 + 1
         assert_eq!(summary.collection_summary.len(), 2);
         assert!(!summary.evidence_hash.is_empty());
+
+        // Check method_type is captured in summary
+        assert_eq!(
+            summary.collection_summary[0].method_type,
+            Some("command".to_string())
+        );
+        assert_eq!(summary.collection_summary[1].method_type, None);
     }
 
     #[test]
     fn test_serialization() {
         let mut evidence = Evidence::new();
         evidence.add_data("obj1", serde_json::json!({"state": "running"}));
-        evidence.add_collection_record(CollectionRecord::new("obj1", "service", "collector"));
+        evidence.add_collection_record(
+            CollectionRecord::new("obj1", "service", "collector")
+                .with_method(CollectionMethod::api("Query API", "/v1/pods")),
+        );
 
         let json = serde_json::to_string(&evidence).unwrap();
         let parsed: Evidence = serde_json::from_str(&json).unwrap();
@@ -427,5 +491,6 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert!(parsed.contains("obj1"));
         assert_eq!(parsed.collection_metadata.len(), 1);
+        assert!(parsed.collection_metadata[0].method.is_some());
     }
 }

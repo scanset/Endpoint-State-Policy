@@ -2,13 +2,14 @@
 # Tests file permissions, ownership, and existence
 
 META
-    esp_scan_id `test-file-metadata-001`
+    esp_id `test-file-metadata-001`
+    version `1.0.0`
+    dsl_schema_version `1.0.0`
     platform `linux`
     criticality `high`
     control_mapping `CIS:6.1.1,CIS:6.1.2,NIST-800-53:AC-6`
     title `Critical System File Permissions`
     description `Validates that critical system files have correct permissions and ownership`
-    version `1.0.0`
     author `security-team`
     tags `file-permissions,linux,hardening`
 META_END

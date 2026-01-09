@@ -1,15 +1,27 @@
 //! Simplified Error types for Pass 3: Symbol Discovery
 
 use common::ast::nodes::SetOperationType;
+use common::logging::codes;
 use common::utils::Span;
+use std::fmt;
 
 /// Result type for symbol discovery operations
 pub type SymbolResult<T> = Result<T, SymbolDiscoveryError>;
 
+/// Shadowing error details (boxed to reduce enum size)
+#[derive(Debug, Clone)]
+pub struct ShadowingDetails {
+    pub identifier: String,
+    pub local_type: String,
+    pub global_type: String,
+    pub ctn_type: String,
+    pub local_span: Span,
+    pub global_span: Span,
+}
+
 /// Basic error types for symbol discovery
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone)]
 pub enum SymbolDiscoveryError {
-    #[error("Duplicate symbol '{identifier}' in {scope} scope: first declared at {first_span}, redeclared at {duplicate_span}")]
     DuplicateSymbol {
         identifier: String,
         scope: String,
@@ -17,26 +29,25 @@ pub enum SymbolDiscoveryError {
         duplicate_span: Span,
     },
 
-    #[error("Reserved keyword '{identifier}' cannot be used as symbol name at {span}")]
-    ReservedSymbolName { identifier: String, span: Span },
+    Shadowing(Box<ShadowingDetails>),
 
-    #[error(
-        "Empty {symbol_type} block '{identifier}' at {span}: must contain at least one element"
-    )]
+    ReservedSymbolName {
+        identifier: String,
+        span: Span,
+    },
+
     EmptySymbolBlock {
         symbol_type: String,
         identifier: String,
         span: Span,
     },
 
-    #[error("Multiple local objects in CTN '{ctn_type}': first at {first_span}, second at {duplicate_span}")]
     MultipleCtnObjects {
         ctn_type: String,
         first_span: Span,
         duplicate_span: Span,
     },
 
-    #[error("Invalid operand count for SET '{set_id}' operation '{operation}': expected {expected}, found {actual} at {span}")]
     InvalidSetOperandCount {
         set_id: String,
         operation: String,
@@ -45,12 +56,82 @@ pub enum SymbolDiscoveryError {
         span: Span,
     },
 
-    #[error("Internal symbol discovery error: {message}")]
-    InternalSymbolError { message: String },
+    InternalSymbolError {
+        message: String,
+    },
 
-    #[error("Symbol table corruption: {message}")]
-    SymbolTableCorruption { message: String },
+    SymbolTableCorruption {
+        message: String,
+    },
 }
+
+impl fmt::Display for SymbolDiscoveryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateSymbol {
+                identifier,
+                scope,
+                first_span,
+                duplicate_span,
+            } => write!(
+                f,
+                "Duplicate symbol '{}' in {} scope: first declared at {}, redeclared at {}",
+                identifier, scope, first_span, duplicate_span
+            ),
+            Self::Shadowing(details) => write!(
+                f,
+                "Local {} '{}' in CTN '{}' shadows global {} declared at {}",
+                details.local_type,
+                details.identifier,
+                details.ctn_type,
+                details.global_type,
+                details.global_span
+            ),
+            Self::ReservedSymbolName { identifier, span } => write!(
+                f,
+                "Reserved keyword '{}' cannot be used as symbol name at {}",
+                identifier, span
+            ),
+            Self::EmptySymbolBlock {
+                symbol_type,
+                identifier,
+                span,
+            } => write!(
+                f,
+                "Empty {} block '{}' at {}: must contain at least one element",
+                symbol_type, identifier, span
+            ),
+            Self::MultipleCtnObjects {
+                ctn_type,
+                first_span,
+                duplicate_span,
+            } => write!(
+                f,
+                "Multiple local objects in CTN '{}': first at {}, second at {}",
+                ctn_type, first_span, duplicate_span
+            ),
+            Self::InvalidSetOperandCount {
+                set_id,
+                operation,
+                expected,
+                actual,
+                span,
+            } => write!(
+                f,
+                "Invalid operand count for SET '{}' operation '{}': expected {}, found {} at {}",
+                set_id, operation, expected, actual, span
+            ),
+            Self::InternalSymbolError { message } => {
+                write!(f, "Internal symbol discovery error: {}", message)
+            }
+            Self::SymbolTableCorruption { message } => {
+                write!(f, "Symbol table corruption: {}", message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for SymbolDiscoveryError {}
 
 impl SymbolDiscoveryError {
     /// Create a duplicate symbol error
@@ -66,6 +147,25 @@ impl SymbolDiscoveryError {
             first_span,
             duplicate_span,
         }
+    }
+
+    /// Create a shadowing error when local symbol shadows global (N-5)
+    pub fn shadowing(
+        identifier: &str,
+        local_type: &str,
+        global_type: &str,
+        ctn_type: &str,
+        local_span: Span,
+        global_span: Span,
+    ) -> Self {
+        Self::Shadowing(Box::new(ShadowingDetails {
+            identifier: identifier.to_string(),
+            local_type: local_type.to_string(),
+            global_type: global_type.to_string(),
+            ctn_type: ctn_type.to_string(),
+            local_span,
+            global_span,
+        }))
     }
 
     /// Create a reserved symbol name error
@@ -134,6 +234,7 @@ impl SymbolDiscoveryError {
     pub fn span(&self) -> Option<Span> {
         match self {
             Self::DuplicateSymbol { duplicate_span, .. } => Some(*duplicate_span),
+            Self::Shadowing(details) => Some(details.local_span),
             Self::ReservedSymbolName { span, .. } => Some(*span),
             Self::EmptySymbolBlock { span, .. } => Some(*span),
             Self::MultipleCtnObjects { duplicate_span, .. } => Some(*duplicate_span),
@@ -152,10 +253,10 @@ impl SymbolDiscoveryError {
     }
 
     /// Get error code for global logging system
-    pub fn error_code(&self) -> common::logging::codes::Code {
-        use common::logging::codes;
+    pub fn error_code(&self) -> codes::Code {
         match self {
             Self::DuplicateSymbol { .. } => codes::symbols::DUPLICATE_SYMBOL,
+            Self::Shadowing(_) => codes::symbols::SYMBOL_SHADOWING,
             Self::ReservedSymbolName { .. } => codes::symbols::SYMBOL_DISCOVERY_ERROR,
             Self::EmptySymbolBlock { .. } => codes::symbols::SYMBOL_DISCOVERY_ERROR,
             Self::MultipleCtnObjects { .. } => codes::symbols::MULTIPLE_LOCAL_OBJECTS,

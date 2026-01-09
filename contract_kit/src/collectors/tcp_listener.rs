@@ -3,6 +3,7 @@
 //! Collects information about TCP ports in LISTEN state.
 //! Reads /proc/net/tcp on Linux to determine if a port is listening.
 
+use common::results::{CollectionMethod, CollectionMethodType};
 use execution_engine::execution::BehaviorHints;
 use execution_engine::strategies::{CollectedData, CollectionError, CtnContract, CtnDataCollector};
 use execution_engine::types::common::ResolvedValue;
@@ -120,8 +121,6 @@ impl TcpListenerCollector {
     }
 
     /// Parse a line from /proc/net/tcp
-    /// Format: sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode
-    /// Example: 0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 12345 1 ...
     fn parse_tcp_line(
         &self,
         line: &str,
@@ -133,15 +132,12 @@ impl TcpListenerCollector {
             return None;
         }
 
-        // local_address is in format ADDR:PORT (hex)
-        // Safe access using .get()
         let local_addr = parts.get(1)?;
         let addr_parts: Vec<&str> = local_addr.split(':').collect();
         if addr_parts.len() != 2 {
             return None;
         }
 
-        // Safe access using .get()
         let local_ip_hex = addr_parts.first()?;
         let local_port_hex = addr_parts.get(1)?;
 
@@ -151,7 +147,6 @@ impl TcpListenerCollector {
         }
 
         // Check state - 0A is LISTEN
-        // Safe access using .get()
         let state = parts.get(3)?;
         if *state != "0A" {
             return None;
@@ -180,13 +175,11 @@ impl TcpListenerCollector {
     }
 
     /// Convert hex IP address (little-endian) to dotted decimal
-    /// /proc/net/tcp stores IPv4 in little-endian hex format
     fn hex_to_ipv4(&self, hex: &str) -> String {
         if hex.len() != 8 {
             return "invalid".to_string();
         }
 
-        // Parse as u32 and convert from little-endian
         let bytes: Vec<u8> = (0..4)
             .filter_map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
             .collect();
@@ -196,7 +189,6 @@ impl TcpListenerCollector {
         }
 
         // /proc/net/tcp stores in little-endian, so reverse for display
-        // Safe access using .get() with defaults
         let b3 = bytes.get(3).copied().unwrap_or(0);
         let b2 = bytes.get(2).copied().unwrap_or(0);
         let b1 = bytes.get(1).copied().unwrap_or(0);
@@ -244,6 +236,19 @@ impl CtnDataCollector for TcpListenerCollector {
             "tcp_listener".to_string(),
             self.id.clone(),
         );
+
+        // Set collection method for traceability
+        let mut method_builder = CollectionMethod::builder()
+            .method_type(CollectionMethodType::SocketInspection)
+            .description("Check TCP port listener state via /proc/net/tcp")
+            .target(format!("tcp:{}", port))
+            .input("port", port.to_string());
+
+        if let Some(ref host) = host_filter {
+            method_builder = method_builder.input("host_filter", host);
+        }
+
+        data.set_method(method_builder.build());
 
         data.add_field(
             "listening".to_string(),
@@ -302,8 +307,6 @@ mod tests {
 
     #[test]
     fn test_port_extraction() {
-        // This would require mocking ExecutableObject
-        // For now, just verify the collector can be created
         let collector = TcpListenerCollector::new();
         assert_eq!(collector.collector_id(), "tcp_listener_collector");
     }

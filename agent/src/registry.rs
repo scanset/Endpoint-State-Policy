@@ -14,6 +14,7 @@ use contract_kit::{collectors, commands, contracts, executors};
 /// - JSON record validation (structured data)
 /// - TCP listener validation (port listening state)
 /// - Kubernetes resource validation (K8s API objects)
+/// - Computed values validation (derived/calculated values)
 pub fn create_scanner_registry() -> Result<CtnStrategyRegistry, StrategyError> {
     let mut registry = CtnStrategyRegistry::new();
 

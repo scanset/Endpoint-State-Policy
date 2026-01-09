@@ -2,10 +2,23 @@
 //!
 //! Provides aggregate statistics across all policies in a scan execution.
 //! Used in both attestations and full results.
+//!
+//! ## Type Aliases
+//!
+//! - `ScanSummary` is an alias for `ExecutionSummary` for backward compatibility
 
 use serde::{Deserialize, Serialize};
 
 use super::common::{Criticality, Outcome};
+
+// ============================================================================
+// Type Aliases
+// ============================================================================
+
+/// Type alias for backward compatibility
+///
+/// `ScanSummary` is the same as `ExecutionSummary`.
+pub type ScanSummary = ExecutionSummary;
 
 // ============================================================================
 // ExecutionSummary
@@ -14,6 +27,7 @@ use super::common::{Criticality, Outcome};
 /// Summary statistics for a scan execution
 ///
 /// Aggregates pass/fail/error counts and calculates posture scores.
+/// Also known as `ScanSummary` (type alias).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionSummary {
     /// Total number of policies evaluated
@@ -49,8 +63,35 @@ impl ExecutionSummary {
         Self::default()
     }
 
-    /// Record a policy result
-    pub fn record(&mut self, outcome: Outcome, criticality: Criticality, weight: f32) {
+    /// Record a policy result using pass/fail boolean
+    ///
+    /// This is the primary method used by result builders.
+    ///
+    /// # Arguments
+    /// * `passed` - Whether the policy passed
+    /// * `criticality` - Criticality level of the policy
+    /// * `weight` - Weight for posture calculation
+    pub fn record(&mut self, passed: bool, criticality: Criticality, weight: f32) {
+        self.total_policies += 1;
+        self.total_weight += weight;
+
+        if passed {
+            self.passed += 1;
+            self.passed_weight += weight;
+            self.by_criticality.record(criticality, true);
+        } else {
+            self.failed += 1;
+            self.by_criticality.record(criticality, false);
+        }
+
+        // Update posture score
+        self.update_posture_score();
+    }
+
+    /// Record a policy result using Outcome enum
+    ///
+    /// Alternative method that accepts an Outcome enum.
+    pub fn record_outcome(&mut self, outcome: Outcome, criticality: Criticality, weight: f32) {
         self.total_policies += 1;
         self.total_weight += weight;
 
@@ -75,6 +116,14 @@ impl ExecutionSummary {
 
         // Update posture score
         self.update_posture_score();
+    }
+
+    /// Record an error (increments error count without affecting pass/fail)
+    ///
+    /// Use this when a policy evaluation resulted in an error.
+    /// The policy should already have been recorded via `record()`.
+    pub fn record_error(&mut self) {
+        self.errors += 1;
     }
 
     /// Recalculate the posture score
@@ -214,7 +263,12 @@ impl CriticalityStats {
 // ============================================================================
 // Tests
 // ============================================================================
-#[allow(clippy::unwrap_used)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,9 +288,9 @@ mod tests {
     fn test_execution_summary_record() {
         let mut summary = ExecutionSummary::new();
 
-        summary.record(Outcome::Pass, Criticality::High, 0.8);
-        summary.record(Outcome::Pass, Criticality::Medium, 0.5);
-        summary.record(Outcome::Fail, Criticality::Critical, 1.0);
+        summary.record(true, Criticality::High, 0.8);
+        summary.record(true, Criticality::Medium, 0.5);
+        summary.record(false, Criticality::Critical, 1.0);
 
         assert_eq!(summary.total_policies, 3);
         assert_eq!(summary.passed, 2);
@@ -248,13 +302,38 @@ mod tests {
     }
 
     #[test]
+    fn test_execution_summary_record_outcome() {
+        let mut summary = ExecutionSummary::new();
+
+        summary.record_outcome(Outcome::Pass, Criticality::High, 0.8);
+        summary.record_outcome(Outcome::Pass, Criticality::Medium, 0.5);
+        summary.record_outcome(Outcome::Fail, Criticality::Critical, 1.0);
+
+        assert_eq!(summary.total_policies, 3);
+        assert_eq!(summary.passed, 2);
+        assert_eq!(summary.failed, 1);
+    }
+
+    #[test]
+    fn test_execution_summary_record_error() {
+        let mut summary = ExecutionSummary::new();
+
+        summary.record(false, Criticality::High, 0.8);
+        summary.record_error(); // Mark as error
+
+        assert_eq!(summary.total_policies, 1);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.errors, 1);
+    }
+
+    #[test]
     fn test_execution_summary_pass_rate() {
         let mut summary = ExecutionSummary::new();
 
-        summary.record(Outcome::Pass, Criticality::High, 1.0);
-        summary.record(Outcome::Pass, Criticality::Medium, 1.0);
-        summary.record(Outcome::Fail, Criticality::Low, 1.0);
-        summary.record(Outcome::Fail, Criticality::Info, 1.0);
+        summary.record(true, Criticality::High, 1.0);
+        summary.record(true, Criticality::Medium, 1.0);
+        summary.record(false, Criticality::Low, 1.0);
+        summary.record(false, Criticality::Info, 1.0);
 
         assert_eq!(summary.pass_rate(), 50.0);
     }
@@ -263,12 +342,12 @@ mod tests {
     fn test_execution_summary_all_passed() {
         let mut summary = ExecutionSummary::new();
 
-        summary.record(Outcome::Pass, Criticality::High, 1.0);
-        summary.record(Outcome::Pass, Criticality::Medium, 1.0);
+        summary.record(true, Criticality::High, 1.0);
+        summary.record(true, Criticality::Medium, 1.0);
 
         assert!(summary.all_passed());
 
-        summary.record(Outcome::Fail, Criticality::Low, 1.0);
+        summary.record(false, Criticality::Low, 1.0);
         assert!(!summary.all_passed());
     }
 
@@ -302,12 +381,12 @@ mod tests {
     #[test]
     fn test_execution_summary_merge() {
         let mut summary1 = ExecutionSummary::new();
-        summary1.record(Outcome::Pass, Criticality::High, 1.0);
-        summary1.record(Outcome::Fail, Criticality::Medium, 0.5);
+        summary1.record(true, Criticality::High, 1.0);
+        summary1.record(false, Criticality::Medium, 0.5);
 
         let mut summary2 = ExecutionSummary::new();
-        summary2.record(Outcome::Pass, Criticality::Critical, 1.0);
-        summary2.record(Outcome::Error, Criticality::Low, 0.2);
+        summary2.record(true, Criticality::Critical, 1.0);
+        summary2.record_outcome(Outcome::Error, Criticality::Low, 0.2);
 
         summary1.merge(&summary2);
 
@@ -320,8 +399,8 @@ mod tests {
     #[test]
     fn test_serialization() {
         let mut summary = ExecutionSummary::new();
-        summary.record(Outcome::Pass, Criticality::High, 0.8);
-        summary.record(Outcome::Fail, Criticality::Critical, 1.0);
+        summary.record(true, Criticality::High, 0.8);
+        summary.record(false, Criticality::Critical, 1.0);
 
         let json = serde_json::to_string(&summary).unwrap();
         let parsed: ExecutionSummary = serde_json::from_str(&json).unwrap();
@@ -329,5 +408,12 @@ mod tests {
         assert_eq!(parsed.total_policies, 2);
         assert_eq!(parsed.passed, 1);
         assert_eq!(parsed.failed, 1);
+    }
+
+    #[test]
+    fn test_scan_summary_alias() {
+        // Verify that ScanSummary is the same type as ExecutionSummary
+        let summary: ScanSummary = ExecutionSummary::new();
+        assert_eq!(summary.total_policies, 0);
     }
 }

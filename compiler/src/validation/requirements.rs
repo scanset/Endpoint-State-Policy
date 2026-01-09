@@ -2,6 +2,8 @@
 
 use super::{error::StructuralError, types::StructuralValidationInput};
 use common::ast::nodes;
+use common::logging::codes;
+use common::metadata::MetaDataBlock;
 use common::utils::Span;
 use common::{log_debug, log_error, log_info, log_success};
 use std::time::Instant;
@@ -42,8 +44,13 @@ pub fn validate_minimum_requirements(
     let mut errors = Vec::new();
 
     log_info!("Starting minimum requirements validation",
-        "criteria_blocks" => input.ast.definition.criteria.len()
+        "criteria_blocks" => input.ast.definition.criteria.len(),
+        "has_metadata" => input.ast.metadata.is_some()
     );
+
+    // Phase 0: Validate META block v1.0.0 compliance
+    log_debug!("Phase 0: Validating META block v1.0.0 compliance");
+    validate_metadata_v1(input, &mut errors, &mut metrics);
 
     // Phase 1: Must contain at least one CRI block
     log_debug!("Phase 1: Validating definition completeness");
@@ -64,7 +71,7 @@ pub fn validate_minimum_requirements(
     // Log validation results
     if errors.is_empty() {
         log_success!(
-            common::logging::codes::success::REQUIREMENTS_CHECK_PASSED,
+            codes::success::REQUIREMENTS_CHECK_PASSED,
             "Minimum requirements validation passed",
             "total_validations" => metrics.definitions_checked + metrics.criteria_blocks_validated + metrics.ctn_blocks_analyzed + metrics.test_specifications_verified,
             "duration_ms" => metrics.total_duration_ms,
@@ -73,7 +80,7 @@ pub fn validate_minimum_requirements(
         Ok(metrics)
     } else {
         log_error!(
-            common::logging::codes::structural::INCOMPLETE_DEFINITION_STRUCTURE,
+            codes::structural::INCOMPLETE_DEFINITION_STRUCTURE,
             "Minimum requirements validation failed",
             "violations" => errors.len(),
             "duration_ms" => metrics.total_duration_ms
@@ -85,6 +92,80 @@ pub fn validate_minimum_requirements(
         Err(errors)
     }
 }
+
+// ============================================================================
+// PHASE 0: META BLOCK v1.0.0 VALIDATION
+// ============================================================================
+
+/// Phase 0: Validate META block for v1.0.0 compliance
+fn validate_metadata_v1(
+    input: &StructuralValidationInput,
+    errors: &mut Vec<StructuralError>,
+    metrics: &mut RequirementsValidationMetrics,
+) {
+    log_debug!("Checking META block v1.0.0 compliance");
+
+    match &input.ast.metadata {
+        Some(metadata_block) => {
+            // Convert AST MetadataBlock to runtime MetaDataBlock for validation
+            let meta = convert_ast_metadata_to_runtime(metadata_block);
+            let span = metadata_block.span;
+
+            match meta.validate_v1() {
+                Ok(()) => {
+                    log_success!(
+                        codes::success::METADATA_VALIDATION_PASSED,
+                        "META block v1.0.0 validation passed"
+                    );
+                }
+                Err(meta_errors) => {
+                    log_error!(
+                        codes::structural::METADATA_VALIDATION_ERROR,
+                        "META block v1.0.0 validation failed",
+                        "error_count" => meta_errors.len()
+                    );
+
+                    for meta_error in meta_errors {
+                        let error =
+                            StructuralError::metadata_validation(meta_error.to_string(), span);
+
+                        log_error!(
+                            codes::structural::METADATA_VALIDATION_ERROR,
+                            "META validation error",
+                            "error" => meta_error.to_string()
+                        );
+
+                        errors.push(error);
+                    }
+                }
+            }
+        }
+        None => {
+            // META block is required in v1.0.0
+            let error = StructuralError::missing_metadata();
+            log_error!(
+                codes::structural::MISSING_METADATA,
+                "META block is required for v1.0.0 compliance"
+            );
+            errors.push(error);
+        }
+    }
+
+    metrics.definitions_checked += 1;
+}
+
+/// Convert AST MetadataBlock to runtime MetaDataBlock for validation
+fn convert_ast_metadata_to_runtime(ast_metadata: &nodes::MetadataBlock) -> MetaDataBlock {
+    let mut meta = MetaDataBlock::new();
+    for field in &ast_metadata.fields {
+        meta.set(&field.name, &field.value);
+    }
+    meta
+}
+
+// ============================================================================
+// PHASE 1: DEFINITION COMPLETENESS
+// ============================================================================
 
 /// Phase 1: Validate definition completeness
 fn validate_definition_completeness(
@@ -117,6 +198,10 @@ fn validate_definition_completeness(
 
     metrics.definitions_checked += 1;
 }
+
+// ============================================================================
+// PHASE 2: CRITERIA BLOCK CONTENT
+// ============================================================================
 
 /// Phase 2: Validate criteria block content
 fn validate_criteria_content(
@@ -172,6 +257,10 @@ fn validate_criteria_content(
         metrics.criteria_blocks_validated += 1;
     }
 }
+
+// ============================================================================
+// PHASE 3: TEST SPECIFICATIONS
+// ============================================================================
 
 /// Phase 3: Validate TEST specifications
 fn validate_test_specifications(
@@ -236,6 +325,10 @@ fn validate_criteria_test_requirements(
     }
 }
 
+// ============================================================================
+// ERROR REPORTING UTILITIES
+// ============================================================================
+
 /// Log detailed error breakdown for requirements validation
 fn log_requirements_error_breakdown(errors: &[StructuralError]) {
     let mut error_types = std::collections::HashMap::new();
@@ -251,6 +344,8 @@ fn log_requirements_error_breakdown(errors: &[StructuralError]) {
         "missing_component_errors" => error_types.get("MissingComponent").unwrap_or(&0),
         "empty_definition_errors" => error_types.get("EmptyDefinition").unwrap_or(&0),
         "empty_criteria_errors" => error_types.get("EmptyCriteria").unwrap_or(&0),
+        "missing_metadata_errors" => error_types.get("MissingMetadata").unwrap_or(&0),
+        "metadata_validation_errors" => error_types.get("MetadataValidation").unwrap_or(&0),
         "critical_severity_count" => error_severity_counts.get("Critical").unwrap_or(&0),
         "high_severity_count" => error_severity_counts.get("High").unwrap_or(&0),
         "medium_severity_count" => error_severity_counts.get("Medium").unwrap_or(&0),
@@ -276,6 +371,27 @@ fn log_requirements_error_breakdown(errors: &[StructuralError]) {
 
         log_info!("Structure issue: Empty criteria blocks detected",
             "empty_criteria_count" => empty_criteria_count
+        );
+    }
+
+    if errors
+        .iter()
+        .any(|e| matches!(e, StructuralError::MissingMetadata))
+    {
+        log_info!("v1.0.0 compliance issue: META block is missing");
+    }
+
+    if errors
+        .iter()
+        .any(|e| matches!(e, StructuralError::MetadataValidation { .. }))
+    {
+        let meta_error_count = errors
+            .iter()
+            .filter(|e| matches!(e, StructuralError::MetadataValidation { .. }))
+            .count();
+
+        log_info!("v1.0.0 compliance issue: META block validation errors",
+            "meta_error_count" => meta_error_count
         );
     }
 }

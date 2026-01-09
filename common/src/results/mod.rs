@@ -1,77 +1,103 @@
-//! # Scan Results Module
+//! # ESP Scan Results Module
 //!
-//! Provides types and utilities for ESP compliance validation results.
+//! Types and utilities for ESP compliance validation results.
 //!
 //! ## Architecture
 //!
 //! ```text
-//! ExecutionEnvelope (wraps all result types)
-//! ├── result_id, agent, host, timestamps, content_hash, signature
-//! │
-//! ├── For Attestations (CUI-free, network-safe)
-//! │   ├── ExecutionSummary
-//! │   ├── CheckAttestation[] (PolicyIdentity + Outcome)
-//! │   └── EvidenceSummary (hash only, no actual values)
-//! │
-//! └── For Full Results (CUI included, local storage)
-//!     ├── ExecutionSummary
-//!     ├── PolicyResult[] (includes findings)
-//!     └── Evidence (complete collected data)
+//! ExecutionManifest (from execution_engine)
+//!     │
+//!     ▼ ResultBuilder
+//!     │
+//! ┌───┴───────────────────────────────────────────┐
+//! │                                               │
+//! ▼                                               ▼
+//! AttestationResult                          FullResult
+//! (feature: attestation)                     (feature: full-results)
+//! │                                               │
+//! ├── envelope (with signature block)            ├── envelope
+//! ├── summary                                    ├── summary
+//! └── checks[]                                   └── policies[]
+//!     ├── identity                                   ├── identity
+//!     ├── outcome                                    ├── outcome
+//!     └── weight                                     ├── weight
+//!                                                    ├── findings[]
+//!                                                    └── evidence
 //! ```
-//!
-//! ## Cryptographic Hashing
-//!
-//! The `crypto` module provides FIPS 140-3 compliant hashing using platform-native
-//! cryptography:
-//! - **Windows**: Windows CNG (BCrypt) - built into all modern Windows versions
-//! - **Linux/Unix**: OpenSSL FIPS provider
 //!
 //! ## Features
 //!
-//! This module supports two output modes via feature flags:
+//! - `attestation` (default) - CUI-free results for SaaS/network transport
+//! - `full-results` - Complete results with evidence (local storage only)
+//! - `assessor-evidence` - Full results with collection commands (implies full-results)
 //!
-//! ### `attestation` (default)
+//! ## Content Matrix
 //!
-//! CUI-free attestations safe for network transport:
-//! - No actual system values
-//! - Only pass/fail metadata
-//! - Content hashing for integrity
-//! - Signature-ready structure
+//! | Content              | Attestation | Full Results | Assessor Evidence |
+//! |----------------------|-------------|--------------|-------------------|
+//! | Policy ID            | ✓           | ✓            | ✓                 |
+//! | Outcome              | ✓           | ✓            | ✓                 |
+//! | Criticality          | ✓           | ✓            | ✓                 |
+//! | Control mappings     | ✓           | ✓            | ✓                 |
+//! | Weight               | ✓           | ✓            | ✓                 |
+//! | Evidence hash        | ✓           | ✓            | ✓                 |
+//! | Host ID              | ✓           | ✓            | ✓                 |
+//! | Findings             | ✗           | ✓            | ✓                 |
+//! | Evidence data        | ✗           | ✓            | ✓                 |
+//! | Collection method    | ✗           | ✓            | ✓                 |
+//! | Collection target    | ✗           | ✓            | ✓                 |
+//! | Collection command   | ✗           | ✗            | ✓                 |
+//! | Collection inputs    | ✗           | ✗            | ✓                 |
 //!
-//! ### `full-results`
+//! ## Usage
 //!
-//! Complete results with evidence (contains CUI):
-//! - Expected/actual values
-//! - Raw collected data
-//! - For local storage only
+//! ### Building Attestations
 //!
-//! ## Required META Fields
+//! ```rust,ignore
+//! use common::results::{ResultBuilder, CheckInput, Criticality, Outcome};
 //!
-//! Both output modes require these META fields:
+//! let builder = ResultBuilder::from_system("agent-001");
 //!
-//! - `esp_scan_id` - Unique policy identifier
-//! - `platform` - Target platform
-//! - `criticality` - Criticality level
-//! - `control_mapping` - Framework:ControlID pairs
+//! let checks = vec![
+//!     CheckInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass),
+//!     CheckInput::new("policy-2", "linux", Criticality::Medium, vec![], Outcome::Fail),
+//! ];
+//!
+//! let attestation = builder.build_attestation(checks, None)?;
+//! ```
+//!
+//! ### Building Full Results
+//!
+//! ```rust,ignore
+//! use common::results::{ResultBuilder, PolicyInput, Criticality, Outcome};
+//!
+//! let builder = ResultBuilder::from_system("agent-001");
+//!
+//! let policies = vec![
+//!     PolicyInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass)
+//!         .with_findings(findings)
+//!         .with_evidence(evidence),
+//! ];
+//!
+//! let full_result = builder.build_full_result(policies)?;
+//! ```
 
 // ============================================================================
 // Core modules (always available)
 // ============================================================================
 
-// Cryptographic utilities (platform-specific implementation)
-pub mod crypto;
-
-// Common types (Outcome, Criticality, etc.)
 pub mod common;
-
-// Error types
+pub mod crypto;
 pub mod error;
 
-// New consolidated types
+pub mod collection_method;
 pub mod envelope;
 pub mod evidence;
+pub mod finding;
 pub mod identity;
 pub mod summary;
+
+pub mod builder;
 
 // ============================================================================
 // Feature-gated modules
@@ -83,11 +109,8 @@ pub mod attestation;
 #[cfg(feature = "full-results")]
 pub mod full;
 
-// ============================================================================
-// Crypto re-exports (always available)
-// ============================================================================
-
-pub use crypto::{hash_content, hex_decode, hex_encode, sha256_hash, verify_hash, HashingError};
+#[cfg(feature = "assessor-evidence")]
+pub mod assessor;
 
 // ============================================================================
 // Common re-exports (always available)
@@ -97,48 +120,65 @@ pub use common::{
     ControlMapping, ControlMappingError, CriteriaCounts, Criticality, Outcome, PolicyOutcome,
     ResultCounts, Weight,
 };
+pub use error::ResultError;
 
-pub use error::{ResultError, ResultGenerationError};
-
-// ============================================================================
-// New consolidated type re-exports (always available)
-// ============================================================================
-
-pub use envelope::{AgentInfo, ExecutionEnvelope, HostInfo, SignatureInfo};
-pub use evidence::{CollectionRecord, CollectionSummary, Evidence, EvidenceSummary};
+pub use collection_method::{CollectionMethod, CollectionMethodBuilder, CollectionMethodType};
+pub use envelope::{AgentInfo, HostInfo, ResultEnvelope, SignatureBlock};
+pub use evidence::{CollectionRecord, Evidence};
+pub use finding::{ComplianceFinding, FindingBuilder, FindingSeverity};
 pub use identity::PolicyIdentity;
-pub use summary::{CriticalityBreakdown, CriticalityStats, ExecutionSummary};
+pub use summary::{CriticalityBreakdown, CriticalityStats, ExecutionSummary, ScanSummary};
+
+pub use builder::ResultBuilder;
 
 // ============================================================================
-// Attestation re-exports (default feature)
+// Crypto re-exports
+// ============================================================================
+
+pub use crypto::{hash_content, hex_decode, hex_encode, sha256_hash, HashingError};
+
+// ============================================================================
+// Attestation re-exports (feature: attestation)
 // ============================================================================
 
 #[cfg(feature = "attestation")]
-pub use attestation::{
-    validate_metadata, AttestationBuildError, AttestationBuilder, AttestationEnvelope,
-    AttestationSummary, CheckAttestation, CriticalityBreakdown as AttestationCriticalityBreakdown,
-    CriticalityStats as AttestationCriticalityStats, ScanAttestation, REQUIRED_META_FIELDS,
-};
+pub use attestation::{AttestationBuilder, AttestationResult, CheckAttestation};
 
-// ============================================================================
-// Full results re-exports (opt-in feature)
-// ============================================================================
-
-#[cfg(feature = "full-results")]
-pub use full::{
-    ComplianceFinding, EspMetadata, Evidence as FullEvidence, FindingSeverity,
-    FullResultBuildError, FullResultBuilder, HostContext, PolicyResult, ScanMetadata, ScanResult,
-    ScanSummary, TimestampInfo, UserContext,
-};
-
-// ============================================================================
-// Convenience type aliases
-// ============================================================================
-
-/// Primary attestation type for network transport
 #[cfg(feature = "attestation")]
-pub type Attestation = ScanAttestation;
+pub use builder::CheckInput;
 
-/// Primary result type for local storage
+// ============================================================================
+// Full results re-exports (feature: full-results)
+// ============================================================================
+
 #[cfg(feature = "full-results")]
-pub type FullResult = ScanResult;
+pub use full::{FullResult, FullResultBuilder, PolicyResult};
+
+#[cfg(feature = "full-results")]
+pub use builder::PolicyInput;
+
+// ============================================================================
+// Assessor package re-exports (feature: assessor-evidence)
+// ============================================================================
+
+#[cfg(feature = "assessor-evidence")]
+pub use assessor::{
+    AssessorPackage, AssessorPackageBuilder, AssessorPolicyResult, CollectionCommand, PackageInfo,
+    ReproducibilityInfo,
+};
+
+/// Primary assessor package type (feature: assessor-evidence)
+#[cfg(feature = "assessor-evidence")]
+pub type AssessorResult = AssessorPackage;
+
+// ============================================================================
+// Type aliases for convenience
+// ============================================================================
+
+/// Primary attestation type (feature: attestation)
+#[cfg(feature = "attestation")]
+pub type Attestation = AttestationResult;
+
+/// Primary full result type (feature: full-results)
+#[cfg(feature = "full-results")]
+pub type FullResults = FullResult;

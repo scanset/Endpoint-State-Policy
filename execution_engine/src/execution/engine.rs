@@ -4,15 +4,22 @@
 //!
 //! ## Architecture
 //!
-//! The engine executes a single policy file and produces a `PolicyResult`.
-//! Multiple `PolicyResult`s are aggregated into a `ScanResult` by the agent.
+//! The engine executes a single policy file and produces an `ExecutionManifest`.
+//! The manifest contains all raw execution data needed to build any output format.
 //!
 //! ```text
 //! ExecutionEngine::execute()
-//!   └── PolicyExecutionResult
-//!         ├── PolicyOutcome (CUI-free core)
-//!         ├── findings: Vec<ComplianceFinding> (CUI)
-//!         └── evidence: Option<Evidence> (CUI)
+//!   └── ExecutionManifest (raw, complete)
+//!         ├── Policy identity (id, platform, criticality, mappings)
+//!         ├── Tree result (logical structure with pass/fail)
+//!         ├── Collected data (with CollectionMethod)
+//!         └── Findings (validation failures)
+//!
+//!         ↓ ResultBuilder (in common/results) transforms to ↓
+//!
+//!         ├── Attestation (CUI-free, hashed)
+//!         ├── FullResults (with Evidence)
+//!         └── AssessorResults (with Evidence + command/inputs)
 //! ```
 
 use crate::execution::behavior::extract_behavior_hints;
@@ -22,20 +29,20 @@ use crate::execution::filter_evaluation::FilterEvaluator;
 use crate::strategies::CtnExecutionError;
 use crate::strategies::{CollectedData, CtnContract, CtnExecutionResult, CtnStrategyRegistry};
 use crate::types::common::{LogicalOp, ResolvedValue};
-use crate::types::criterion::CtnNodeId;
 use crate::types::execution_context::{
     ExecutableCriteriaTree, ExecutableCriterion, ExecutableObject, ExecutionContext,
 };
+use crate::types::manifest::{CtnResult, ExecutionManifest, TreeResult};
 use common::ast::nodes::FilterAction;
-use common::metadata::MetaDataBlock;
+use common::results::common::PolicyOutcome;
 use common::results::{
-    ComplianceFinding, ControlMapping, CriteriaCounts, Criticality, Evidence, FindingSeverity,
-    Outcome, PolicyOutcome,
+    ComplianceFinding, ControlMapping, CriteriaCounts, Criticality, FindingSeverity, Outcome,
 };
 use common::{log_debug, log_info};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 
 // ============================================================================
 // Execution Engine
@@ -55,9 +62,11 @@ impl ExecutionEngine {
 
     /// Main execution entry point
     ///
-    /// Executes the criteria tree for a single policy and produces a `PolicyExecutionResult`.
-    /// The result contains CUI-free outcome data plus optional CUI (findings/evidence).
-    pub fn execute(&mut self) -> Result<PolicyExecutionResult, ExecutionError> {
+    /// Executes the criteria tree for a single policy and produces an `ExecutionManifest`.
+    /// The manifest contains all raw data needed to build any output format.
+    pub fn execute(&mut self) -> Result<ExecutionManifest, ExecutionError> {
+        let start_time = Instant::now();
+
         // Validate execution context before starting
         self.context
             .validate()
@@ -69,16 +78,16 @@ impl ExecutionEngine {
         // Execute the criteria tree recursively
         let tree_result = self.execute_tree(&self.context.criteria_tree.clone())?;
 
-        // Calculate flat statistics from tree (for metrics/dashboards)
+        // Calculate statistics from tree
         let stats = tree_result.calculate_stats();
 
-        // Convert tree results to findings (CUI)
+        // Convert tree results to findings
         let findings = self.tree_result_to_findings(&tree_result, vec![])?;
 
-        // Build evidence from collected data (CUI)
-        let evidence = self.build_evidence(&tree_result);
+        // Collect all collected_data from tree into a single HashMap
+        let collected_data = self.collect_all_data_from_tree(&tree_result);
 
-        // Extract metadata and build policy outcome
+        // Extract metadata
         let metadata =
             self.context
                 .metadata
@@ -88,42 +97,22 @@ impl ExecutionEngine {
                     reason: "Missing metadata in execution context".to_string(),
                 })?;
 
-        let policy_outcome = self.build_policy_outcome(metadata, &tree_result, &stats)?;
-
-        // Build criteria counts
-        let criteria_counts =
-            CriteriaCounts::new(stats.total, stats.passed, stats.failed, stats.errors);
-
-        Ok(PolicyExecutionResult {
-            outcome: policy_outcome,
-            criteria_counts,
-            findings,
-            evidence,
-            tree_passed: tree_result.status == Outcome::Pass,
-        })
-    }
-
-    /// Build PolicyOutcome from metadata and execution results
-    fn build_policy_outcome(
-        &self,
-        metadata: &MetaDataBlock,
-        tree_result: &TreeResult,
-        stats: &TreeStats,
-    ) -> Result<PolicyOutcome, ExecutionError> {
-        // Extract required fields
+        // Extract required fields from metadata
         let policy_id = metadata
             .policy_id()
             .ok_or_else(|| ExecutionError::ExecutorFailed {
                 ctn_type: "metadata_extraction".to_string(),
                 reason: "Missing esp_scan_id in metadata".to_string(),
-            })?;
+            })?
+            .to_string();
 
         let platform = metadata
             .platform()
             .ok_or_else(|| ExecutionError::ExecutorFailed {
                 ctn_type: "metadata_extraction".to_string(),
                 reason: "Missing platform in metadata".to_string(),
-            })?;
+            })?
+            .to_string();
 
         let criticality_str =
             metadata
@@ -156,82 +145,57 @@ impl ExecutionEngine {
                 }
             })?;
 
-        // Determine outcome - use tree logic, not flat stats
-        let outcome = tree_result.status;
-
         // Build criteria counts
         let criteria_counts =
             CriteriaCounts::new(stats.total, stats.passed, stats.failed, stats.errors);
 
-        Ok(PolicyOutcome::new(
+        let execution_duration = start_time.elapsed();
+
+        // Build the execution manifest
+        Ok(ExecutionManifest {
             policy_id,
             platform,
-            outcome,
             criticality,
             control_mappings,
+            tree_result,
             criteria_counts,
-        ))
+            tree_passed: stats.failed == 0 && stats.errors == 0,
+            collected_data,
+            findings,
+            executed_at: current_timestamp(),
+            execution_duration_ms: execution_duration.as_millis() as u64,
+        })
     }
 
-    /// Build evidence from tree execution (CUI)
+    /// Collect all CollectedData from tree into a single HashMap
     ///
-    /// Extracts collected data from CtnExecutionResult for all CTN executions
-    /// in the tree and aggregates them into a single Evidence structure.
-    fn build_evidence(&self, tree_result: &TreeResult) -> Option<Evidence> {
-        let mut evidence = Evidence::new();
-        let mut has_evidence = false;
-
-        // Recursively collect evidence from all CTN results
-        self.collect_evidence_from_tree(tree_result, &mut evidence, &mut has_evidence);
-
-        if has_evidence {
-            Some(evidence)
-        } else {
-            None
-        }
-    }
-
-    /// Recursively collect evidence from tree results
-    ///
-    /// Now extracts from collected_data field which contains the actual
-    /// collected values, not just what was in details.
-    fn collect_evidence_from_tree(
+    /// Keys are formatted as "{ctn_type}_{object_id}" for uniqueness.
+    fn collect_all_data_from_tree(
         &self,
         tree_result: &TreeResult,
-        evidence: &mut Evidence,
-        has_evidence: &mut bool,
+    ) -> HashMap<String, CollectedData> {
+        let mut all_data = HashMap::new();
+        self.collect_data_recursive(tree_result, &mut all_data);
+        all_data
+    }
+
+    /// Recursively collect data from tree
+    fn collect_data_recursive(
+        &self,
+        tree_result: &TreeResult,
+        all_data: &mut HashMap<String, CollectedData>,
     ) {
         // Collect from CTN results at this level
         for ctn_result in &tree_result.ctn_results {
-            // Extract evidence from collected_data (the new field)
-            if !ctn_result.execution_result.collected_data.is_empty() {
-                for (object_id, collected_data) in &ctn_result.execution_result.collected_data {
-                    // Use object_id as the key, with CTN type prefix for uniqueness
-                    let key = format!("{}_{}", ctn_result.criterion_type, object_id);
-
-                    // Convert collected fields to JSON
-                    let fields_json = collected_data.fields_to_json();
-                    evidence.add_data(key, fields_json);
-                    *has_evidence = true;
-                }
-            }
-
-            // Also check legacy details.evidence for backwards compatibility
-            if let Some(ctn_evidence) = ctn_result.execution_result.details.get("evidence") {
-                if !ctn_evidence.is_null() {
-                    let key = format!(
-                        "{}_{}_details",
-                        ctn_result.criterion_type, ctn_result.ctn_node_id
-                    );
-                    evidence.add_data(key, ctn_evidence.clone());
-                    *has_evidence = true;
-                }
+            for (object_id, collected_data) in &ctn_result.execution_result.collected_data {
+                let key = format!("{}_{}", ctn_result.criterion_type, object_id);
+                all_data.insert(key, collected_data.clone());
             }
         }
 
         // Recurse into children
         for child in &tree_result.child_results {
-            self.collect_evidence_from_tree(child, evidence, has_evidence);
+            self.collect_data_recursive(child, all_data);
         }
     }
 
@@ -242,25 +206,22 @@ impl ExecutionEngine {
     ) -> Result<TreeResult, ExecutionError> {
         match tree {
             ExecutableCriteriaTree::Criterion(criterion) => {
+                let start = Instant::now();
+
                 // Clone the criterion so we can mutate it
                 let mut mutable_criterion = criterion.clone();
 
                 // Execute with mutable reference
                 let result = self.execute_single_criterion(&mut mutable_criterion)?;
 
-                Ok(TreeResult {
-                    status: result.status,
-                    logical_op: None,
-                    negated: false,
-                    ctn_results: vec![CtnResult {
-                        ctn_node_id: criterion.ctn_node_id,
-                        criterion_type: criterion.criterion_type.clone(),
-                        status: result.status,
-                        execution_result: result,
-                        execution_time_ms: 0,
-                    }],
-                    child_results: vec![],
-                })
+                let ctn_result = CtnResult::new(
+                    criterion.ctn_node_id,
+                    criterion.criterion_type.clone(),
+                    result,
+                    start.elapsed().as_millis() as u64,
+                );
+
+                Ok(TreeResult::leaf(ctn_result))
             }
             ExecutableCriteriaTree::Block {
                 logical_op,
@@ -273,46 +234,7 @@ impl ExecutionEngine {
                     child_results.push(child_result);
                 }
 
-                let combined = self.apply_logical_op(&child_results, *logical_op);
-                let final_status = if *negate { combined.negate() } else { combined };
-
-                Ok(TreeResult {
-                    status: final_status,
-                    logical_op: Some(*logical_op),
-                    negated: *negate,
-                    ctn_results: vec![],
-                    child_results,
-                })
-            }
-        }
-    }
-
-    /// Apply logical operator to child tree results
-    fn apply_logical_op(&self, children: &[TreeResult], op: LogicalOp) -> Outcome {
-        if children.is_empty() {
-            return Outcome::Error;
-        }
-
-        match op {
-            LogicalOp::And => {
-                // ALL children must pass
-                if children.iter().all(|c| c.status == Outcome::Pass) {
-                    Outcome::Pass
-                } else if children.iter().any(|c| c.status == Outcome::Error) {
-                    Outcome::Error
-                } else {
-                    Outcome::Fail
-                }
-            }
-            LogicalOp::Or => {
-                // ANY child passes = pass
-                if children.iter().any(|c| c.status == Outcome::Pass) {
-                    Outcome::Pass
-                } else if children.iter().all(|c| c.status == Outcome::Error) {
-                    Outcome::Error
-                } else {
-                    Outcome::Fail
-                }
+                Ok(TreeResult::block(*logical_op, *negate, child_results))
             }
         }
     }
@@ -944,33 +866,93 @@ impl ExecutionEngine {
 }
 
 // ============================================================================
-// Result Types
+// Legacy Result Type (for backwards compatibility)
 // ============================================================================
 
 /// Result from executing a single policy
 ///
-/// This is the output of `ExecutionEngine::execute()` for one policy file.
-/// Contains both CUI-free outcome data and optional CUI (findings/evidence).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// **DEPRECATED**: Use `ExecutionManifest` directly. This type is provided
+/// for backwards compatibility with existing code.
+///
+/// To migrate:
+/// ```rust,ignore
+/// // Old:
+/// let result: PolicyExecutionResult = engine.execute()?;
+/// if result.tree_passed { ... }
+///
+/// // New:
+/// let manifest: ExecutionManifest = engine.execute()?;
+/// if manifest.tree_passed { ... }
+/// ```
+#[derive(Debug, Clone)]
 pub struct PolicyExecutionResult {
-    /// CUI-free policy outcome (safe for attestations)
-    pub outcome: PolicyOutcome,
-
-    /// Criteria counts (pass/fail/error)
+    /// Policy outcome
+    pub outcome: common::results::PolicyOutcome,
+    /// Criteria counts
     pub criteria_counts: CriteriaCounts,
-
-    /// Detailed findings (CUI - contains expected/actual values)
+    /// Findings
     pub findings: Vec<ComplianceFinding>,
-
-    /// Raw evidence data (CUI - contains collected system values)
-    pub evidence: Option<Evidence>,
-
-    /// Whether the tree logic resulted in pass (respects CRI AND/OR/NOT)
+    /// Evidence (if any)
+    pub evidence: Option<common::results::Evidence>,
+    /// Whether the tree passed
     pub tree_passed: bool,
 }
 
+impl From<ExecutionManifest> for PolicyExecutionResult {
+    fn from(manifest: ExecutionManifest) -> Self {
+        // Build PolicyOutcome from manifest
+        let outcome = PolicyOutcome::new(
+            manifest.policy_id.clone(),
+            manifest.platform.clone(),
+            manifest.tree_result.status,
+            manifest.criticality,
+            manifest.control_mappings.clone(),
+            manifest.criteria_counts,
+        );
+
+        // Build Evidence from collected_data
+        let evidence = if manifest.collected_data.is_empty() {
+            None
+        } else {
+            let mut evidence = common::results::Evidence::new();
+            for (key, data) in &manifest.collected_data {
+                evidence.add_data(key.clone(), data.fields_to_json());
+
+                // Add collection record with method
+                let record = common::results::CollectionRecord::new(
+                    data.object_id.clone(),
+                    data.ctn_type.clone(),
+                    data.metadata.collector_id.clone(),
+                )
+                .with_mode(data.metadata.collection_mode.clone())
+                .with_duration_ms(data.metadata.collection_duration.as_millis() as u64)
+                .with_field_count(data.fields.len())
+                .with_warnings(data.metadata.warnings.clone());
+
+                // Add method if present
+                let record = if let Some(ref method) = data.metadata.method {
+                    record.with_method(method.clone())
+                } else {
+                    record
+                };
+
+                evidence.add_collection_record(record);
+            }
+            Some(evidence)
+        };
+
+        Self {
+            outcome,
+            criteria_counts: manifest.criteria_counts,
+            findings: manifest.findings,
+            evidence,
+            tree_passed: manifest.tree_passed,
+        }
+    }
+}
+
 impl PolicyExecutionResult {
-    /// Check if the policy passed (using tree logic)
+    /// Check if the policy passed
     pub fn is_pass(&self) -> bool {
         self.tree_passed
     }
@@ -984,60 +966,6 @@ impl PolicyExecutionResult {
     pub fn policy_id(&self) -> &str {
         &self.outcome.policy_id
     }
-}
-
-/// CTN execution result with tree context
-#[derive(Debug, Clone)]
-pub struct CtnResult {
-    pub ctn_node_id: CtnNodeId,
-    pub criterion_type: String,
-    pub status: Outcome,
-    pub execution_result: CtnExecutionResult,
-    pub execution_time_ms: u64,
-}
-
-/// Tree traversal result (internal)
-#[derive(Debug, Clone)]
-struct TreeResult {
-    pub status: Outcome,
-    pub logical_op: Option<LogicalOp>,
-    pub negated: bool,
-    pub ctn_results: Vec<CtnResult>,
-    pub child_results: Vec<TreeResult>,
-}
-
-impl TreeResult {
-    fn calculate_stats(&self) -> TreeStats {
-        let mut stats = TreeStats::default();
-        for ctn in &self.ctn_results {
-            stats.total += 1;
-            match ctn.status {
-                Outcome::Pass => stats.passed += 1,
-                Outcome::Fail => stats.failed += 1,
-                Outcome::Error => stats.errors += 1,
-                _ => {}
-            }
-        }
-
-        // Recurse into children
-        for child in &self.child_results {
-            let child_stats = child.calculate_stats();
-            stats.total += child_stats.total;
-            stats.passed += child_stats.passed;
-            stats.failed += child_stats.failed;
-            stats.errors += child_stats.errors;
-        }
-
-        stats
-    }
-}
-
-#[derive(Debug, Default)]
-struct TreeStats {
-    total: u32,
-    passed: u32,
-    failed: u32,
-    errors: u32,
 }
 
 // ============================================================================
@@ -1098,4 +1026,30 @@ fn logical_op_to_string(op: LogicalOp) -> &'static str {
         LogicalOp::And => "AND",
         LogicalOp::Or => "OR",
     }
+}
+
+/// Generate ISO 8601 timestamp
+fn current_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let secs = duration.as_secs();
+    let days = secs / 86400;
+    let remaining = secs % 86400;
+    let hours = remaining / 3600;
+    let minutes = (remaining % 3600) / 60;
+    let seconds = remaining % 60;
+
+    let years = 1970 + (days / 365);
+    let day_of_year = days % 365;
+    let month = (day_of_year / 30).min(11) + 1;
+    let day = (day_of_year % 30) + 1;
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        years, month, day, hours, minutes, seconds
+    )
 }
