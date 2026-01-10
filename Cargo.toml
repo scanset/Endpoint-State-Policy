@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["common", "compiler", "execution_engine", "contract_kit", "agent"]
+members = ["common", "compiler", "execution_engine"]
 
 [workspace.package]
 version = "1.0.0"

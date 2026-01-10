@@ -1,7 +1,7 @@
 # ESP Monorepo Makefile
 # Provides convenient commands for development, testing, and building
 
-.PHONY: help build build-all build-libs test lint clean check security audit format docs install dev release run run-compiler
+.PHONY: help build build-all build-libs test lint clean check security audit format docs dev release
 
 # Default target
 help:
@@ -9,16 +9,11 @@ help:
 	@echo "=================================="
 	@echo ""
 	@echo "Building:"
-	@echo "  make build        - Build the agent binary"
-	@echo "  make build-all    - Build all crates (libraries + binaries)"
-	@echo "  make build-libs   - Build libraries only"
-	@echo "  make dev          - Build agent in development mode"
-	@echo "  make release      - Build optimized release agent"
+	@echo "  make build        - Build all library crates"
+	@echo "  make build-all    - Build all crates including compiler binary"
+	@echo "  make dev          - Build in development mode"
+	@echo "  make release      - Build optimized release"
 	@echo "  make clean        - Clean all build artifacts"
-	@echo ""
-	@echo "Running:"
-	@echo "  make run ESP=<file>         - Run agent on ESP file"
-	@echo "  make run-compiler ESP=<file> - Run compiler on ESP file"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test         - Run all tests"
@@ -45,90 +40,28 @@ help:
 	@echo "Pre-commit:"
 	@echo "  make pre-commit   - Run pre-commit checks"
 	@echo ""
-	@echo "Examples:"
-	@echo "  make run ESP=policy.esp"
-	@echo "  make run ESP=/path/to/policies/"
-	@echo "  make run-compiler ESP=policy.esp"
-	@echo ""
 
 # =============================================================================
 # Building
 # =============================================================================
 
-# Build agent binary (default)
+# Build library crates (default)
 build:
-	cargo build --package agent
-
-# Build all crates
-build-all:
-	cargo build --workspace
-
-# Build libraries only
-build-libs:
 	cargo build --package common
 	cargo build --package compiler
 	cargo build --package execution_engine
-	cargo build --package contract_kit
 
-# Development build (agent)
+# Build all crates including compiler binary
+build-all:
+	cargo build --workspace
+
+# Development build
 dev:
-	ESP_BUILD_PROFILE=development cargo build --package agent
+	ESP_BUILD_PROFILE=development cargo build --workspace
 
-# Release build (agent)
+# Release build
 release:
-	ESP_BUILD_PROFILE=production cargo build --release --package agent
-
-# Release build all
-release-all:
 	ESP_BUILD_PROFILE=production cargo build --release --workspace
-
-# =============================================================================
-# Running
-# =============================================================================
-
-# Run the agent
-# Usage: make run ESP=policy.esp
-# Usage: make run ESP=/path/to/policies/
-run:
-ifndef ESP
-	@echo "Usage: make run ESP=<file.esp|directory>"
-	@echo ""
-	@echo "Examples:"
-	@echo "  make run ESP=policy.esp"
-	@echo "  make run ESP=/path/to/policies/"
-	@exit 1
-endif
-	cargo run --package agent -- $(ESP) $(ARGS)
-
-# Run the agent in release mode
-run-release:
-ifndef ESP
-	@echo "Usage: make run-release ESP=<file.esp|directory>"
-	@exit 1
-endif
-	cargo run --release --package agent -- $(ESP) $(ARGS)
-
-# Run the compiler
-# Usage: make run-compiler ESP=policy.esp
-# Usage: make run-compiler ESP=/path/to/policies/
-run-compiler:
-ifndef ESP
-	@echo "Usage: make run-compiler ESP=<file.esp|directory>"
-	@echo ""
-	@echo "Examples:"
-	@echo "  make run-compiler ESP=policy.esp"
-	@echo "  make run-compiler ESP=/path/to/policies/ --sequential"
-	@exit 1
-endif
-	cargo run --package compiler -- $(ESP) $(ARGS)
-
-# Run compiler in release mode
-run-compiler-release:
-ifndef ESP
-	@echo "Usage: make run-compiler-release ESP=<file.esp|directory>"
-	@exit 1
-endif
-	cargo run --release --package compiler -- $(ESP) $(ARGS)
 
 # =============================================================================
 # Testing
@@ -155,12 +88,6 @@ test-compiler:
 
 test-engine:
 	cargo test --package execution_engine
-
-test-kit:
-	cargo test --package contract_kit
-
-test-agent:
-	cargo test --package agent
 
 # =============================================================================
 # Code Quality
@@ -243,8 +170,6 @@ clean-all: clean
 	rm -rf common/target/
 	rm -rf compiler/target/
 	rm -rf execution_engine/target/
-	rm -rf contract_kit/target/
-	rm -rf agent/target/
 
 # =============================================================================
 # Pre-commit & CI
@@ -260,23 +185,9 @@ ci: format-check lint test-all security
 # Installation
 # =============================================================================
 
-# Install agent binary to ~/.cargo/bin
-install:
-	cargo install --path agent
-
 # Install development tools
 install-tools:
 	cargo install cargo-audit cargo-outdated cargo-watch cargo-tree cargo-bloat
-
-# =============================================================================
-# Cross-compilation
-# =============================================================================
-
-build-windows:
-	ESP_BUILD_PROFILE=production cargo build --release --package agent --target x86_64-pc-windows-gnu
-
-build-linux:
-	ESP_BUILD_PROFILE=production cargo build --release --package agent --target x86_64-unknown-linux-gnu
 
 # =============================================================================
 # Watch Mode (Development)
@@ -287,9 +198,6 @@ watch:
 
 watch-test:
 	cargo watch -x 'test --workspace'
-
-watch-agent:
-	cargo watch -x 'build --package agent'
 
 # =============================================================================
 # Benchmarking

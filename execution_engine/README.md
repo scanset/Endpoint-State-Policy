@@ -1,4 +1,4 @@
-# Agent Core
+# Execution Engine
 
 Runtime execution framework for ESP (Endpoint State Policy) compliance validation.
 
@@ -16,7 +16,7 @@ Runtime execution framework for ESP (Endpoint State Policy) compliance validatio
 
 ## Overview
 
-Agent Core (`execution_engine`) consumes parsed ESP definitions from the `compiler`, resolves all dependencies and references, executes platform-specific data collection, and validates system state against compliance requirements.
+The Execution Engine (`execution_engine`) consumes parsed ESP definitions from the `compiler`, resolves all dependencies and references, executes platform-specific data collection, and validates system state against compliance requirements.
 
 ### Key Features
 
@@ -32,7 +32,6 @@ Agent Core (`execution_engine`) consumes parsed ESP definitions from the `compil
 |-------|--------------|
 | `compiler` | Provides AST input via `conversion` module |
 | `common` | Shared types (AST nodes, results, logging) |
-| `contract_kit` | Builds on execution_engine with `execution_api` high-level interface |
 
 ## Architecture
 
@@ -69,7 +68,7 @@ ESP Source (.esp)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      execution_engine                             │
+│                      execution_engine                       │
 ├─────────────────────────────────────────────────────────────┤
 │  conversion   │  AST → scanner types bridge                 │
 ├───────────────┼─────────────────────────────────────────────┤
@@ -97,11 +96,15 @@ ESP Source (.esp)
 | Criterion | `CTN` | Individual test combining object + state |
 | Runtime Ops | `RUN` | Data transformations |
 
+📄 See [ESP Overview](../docs/01_ESP_Overview_v1_0_0.md) for complete language introduction.
+
 ### Scoping Model
 
 - **Global Scope**: Definition-level declarations (VAR, STATE, OBJECT, SET)
 - **Local Scope**: CTN-level declarations (only within that CTN)
 - **References**: `STATE_REF`, `OBJECT_REF`, `SET_REF`, `VAR`
+
+📄 See [ESP Symbol Resolution](../docs/05_ESP_Symbol_Resolution_v1_0_0.md) for scoping rules.
 
 ### Resolution vs Execution
 
@@ -149,6 +152,8 @@ use execution_engine::types::{
 };
 ```
 
+📄 See [ESP Type System](../docs/04_ESP_Type_System_v1_0_0.md) for type definitions.
+
 ---
 
 ### `resolution`
@@ -177,6 +182,8 @@ let exec_context = engine.resolve()?;
 4. Expand SET_REF recursively
 5. Validate filters
 6. Produce `ExecutionContext`
+
+📄 See [ESP Symbol Resolution](../docs/05_ESP_Symbol_Resolution_v1_0_0.md) for resolution rules.
 
 ---
 
@@ -209,21 +216,27 @@ registry.register_ctn_strategy(
 pub trait CtnDataCollector: Send + Sync {
     fn collector_id(&self) -> &str;
     fn supported_ctn_types(&self) -> Vec<String>;
-    fn collect(&self, object: &ExecutableObject, contract: &CtnContract)
-        -> Result<CollectedData, CollectionError>;
+    fn collect_for_ctn_with_hints(
+        &self,
+        object: &ExecutableObject,
+        contract: &CtnContract,
+        hints: &BehaviorHints,
+    ) -> Result<CollectedData, CollectionError>;
 }
 
 pub trait CtnExecutor: Send + Sync {
-    fn executor_id(&self) -> &str;
     fn ctn_type(&self) -> &str;
+    fn get_ctn_contract(&self) -> CtnContract;
     fn execute_with_contract(
         &self,
         criterion: &ExecutableCriterion,
-        collected_data: &HashMap<String, CollectedData>,
+        collected_data: HashMap<String, CollectedData>,
         contract: &CtnContract,
     ) -> Result<CtnExecutionResult, CtnExecutionError>;
 }
 ```
+
+📄 See [ESP Trust Model](../docs/10_ESP_Trust_Model_v1_0_0.md) for security boundaries.
 
 ---
 
@@ -261,21 +274,11 @@ use execution_engine::execution::comparisons::ComparisonExt;
 let result = actual_value.compare_with(&expected_value, Operation::Contains)?;
 ```
 
+📄 See [ESP Evaluation Semantics](../docs/06_ESP_Evaluation_Semantics_v1_0_0.md) for evaluation rules.
+
 ## Usage
 
-### Basic: Using `contract_kit` API (Recommended)
-
-The `contract_kit` crate provides a simplified interface:
-
-```rust
-use contract_kit::execution_api::{scan_file, format_report};
-
-let registry = create_scanner_registry()?;
-let result = scan_file(Path::new("policy.esp"), registry)?;
-println!("{}", format_report(&result));
-```
-
-### Direct: Full Pipeline Control
+### Basic Pipeline
 
 ```rust
 use execution_engine::conversion::convert_ast_to_scanner_types;
@@ -397,7 +400,9 @@ The strategy system separates **specification** (contracts) from **implementatio
                       └──────────────┘     └──────────────┘
 ```
 
-See `contract_kit` for example collector/executor implementations.
+### Implementing a Strategy
+
+For implementing custom CTN types with collectors and executors, see the Contract Development Guide in external scanner implementations.
 
 ## Error Handling
 
@@ -422,14 +427,17 @@ match engine.execute() {
 }
 ```
 
+📄 See [ESP Error Model](../docs/08_ESP_Error_Model_v1_0_0.md) for error codes and handling.
+
 ## Results
 
 Scan results and compliance findings are handled by the `common` crate's results module:
 
 - **Attestations**: Network-safe output (pass/fail metadata only)
 - **Full Results**: Complete evidence for local storage
+- **Assessor Packages**: Full results with collection commands for reproducibility
 
-See [common/results](../common/results/README.md) for result types and builders.
+📄 See [ESP Canonical Schema](../docs/09_ESP_Canonical_Schema_v1_0_0.md) for output format specification.
 
 ## Glossary
 
@@ -444,10 +452,29 @@ See [common/results](../common/results/README.md) for result types and builders.
 
 ## Related Documentation
 
-- [compiler](../compiler/README.md) - ESP parsing and AST generation>
-- [common](../common/README.md) - Shared types (AST, logging, results)
-- [contract_kit](../contract_kit/README.md) - Agent implementation library
-- [EBNF Grammar](../docs/EBNF.md) - Complete ESP language specification
+### ESP Language Specification
+
+| Document | Description |
+|----------|-------------|
+| [ESP Overview](../docs/01_ESP_Overview_v1_0_0.md) | Language introduction and concepts |
+| [Lexical Rules](../docs/02_ESP_Lexical_Rules_v1_0_0.md) | Token definitions and lexical structure |
+| [Grammar EBNF](../docs/03_ESP_Grammar_EBNF_v1_0_0.md) | Complete grammar specification |
+| [Type System](../docs/04_ESP_Type_System_v1_0_0.md) | Data types and type compatibility |
+| [Symbol Resolution](../docs/05_ESP_Symbol_Resolution_v1_0_0.md) | Symbol tables and reference resolution |
+| [Evaluation Semantics](../docs/06_ESP_Evaluation_Semantics_v1_0_0.md) | Runtime evaluation rules |
+| [Meta Requirements](../docs/07_ESP_Meta_Requirements_v1_0_0.md) | Structural requirements |
+| [Error Model](../docs/08_ESP_Error_Model_v1_0_0.md) | Error codes and handling |
+| [Canonical Schema](../docs/09_ESP_Canonical_Schema_v1_0_0.md) | Output format specification |
+| [Trust Model](../docs/10_ESP_Trust_Model_v1_0_0.md) | Security boundaries and trust |
+| [Configuration](../docs/11_ESP_Configuration_v1_0_0.md) | Build and runtime configuration |
+| [Logging](../docs/12_ESP_Logging_v1_0_0.md) | Logging system specification |
+
+### Related Crates
+
+| Crate | Description |
+|-------|-------------|
+| [compiler](../compiler/README.md) | ESP parsing and AST generation |
+| [common](../common/README.md) | Shared types (AST, logging, config, results) |
 
 ## License
 

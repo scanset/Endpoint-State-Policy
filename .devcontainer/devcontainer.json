@@ -1,5 +1,5 @@
 {
-    "name": "ESP Rust Development",
+    "name": "ESP Core Development",
     "build": {
         "context": "..",
         "dockerfile": "Dockerfile"

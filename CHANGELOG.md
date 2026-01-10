@@ -1,5 +1,51 @@
 # Changelog with Security Notes
 
+## [1.0.0] - 2026-01-09
+
+### Added
+- **ESP Language Specification** (docs): Complete 12-document specification suite:
+  - `01_ESP_Overview_v1_0_0.md` - Language introduction and concepts
+  - `02_ESP_Lexical_Rules_v1_0_0.md` - Token definitions and lexical structure
+  - `03_ESP_Grammar_EBNF_v1_0_0.md` - Formal grammar specification
+  - `04_ESP_Type_System_v1_0_0.md` - Data types and type compatibility
+  - `05_ESP_Symbol_Resolution_v1_0_0.md` - Symbol tables and reference resolution
+  - `06_ESP_Evaluation_Semantics_v1_0_0.md` - Runtime evaluation rules
+  - `07_ESP_Meta_Requirements_v1_0_0.md` - Structural requirements
+  - `08_ESP_Error_Model_v1_0_0.md` - Error codes and handling
+  - `09_ESP_Canonical_Schema_v1_0_0.md` - Output format specification
+  - `10_ESP_Trust_Model_v1_0_0.md` - Security boundaries and trust
+  - `11_ESP_Configuration_v1_0_0.md` - Build and runtime configuration
+  - `12_ESP_Logging_v1_0_0.md` - Logging system specification
+- **Assessor Evidence Feature** (common): New `assessor-evidence` feature flag providing `AssessorPackage`, `AssessorPolicyResult`, `CollectionCommand`, and `ReproducibilityInfo` types for assessor-grade evidence packages with collection commands.
+- **CollectionMethod Traceability** (common): New `CollectionMethod` type for documenting how evidence was collected:
+  - `CollectionMethod::command(cmd, target)` - System command execution
+  - `CollectionMethod::api(endpoint, resource)` - REST/gRPC API calls
+  - `CollectionMethod::file_read(path)` - Direct file access
+  - `CollectionMethod::computed()` - Derived/calculated values
+  - Builder pattern with `with_description()` for human-readable context
+- **CollectedData.set_method()** (execution_engine): Integration point for documenting collection method in `CollectedData` struct.
+
+### Changed
+- **Results Module Restructure** (common): Reorganized results module with clearer feature tiers:
+  - Core types always available: `Outcome`, `Criticality`, `Weight`, `CriteriaCounts`, `CollectionMethod`, `Evidence`, `ComplianceFinding`, `ResultBuilder`
+  - `attestation` feature (default): Network-safe `AttestationResult`, `CheckAttestation`
+  - `full-results` feature: Complete `FullResult`, `PolicyResult` with evidence
+  - `assessor-evidence` feature: `AssessorPackage` with collection commands (implies `full-results`)
+- **Documentation Updates**: Updated all crate READMEs with links to specification documents and accurate module documentation.
+
+### Removed
+- **Agent Crate**: Moved to [ESP Agent SDK](https://github.com/scanset/ESP-Agent-SDK) - Reference scanner implementation with CLI agent.
+- **Contract Kit Crate**: Moved to [ESP Agent SDK](https://github.com/scanset/ESP-Agent-SDK) - Reference CTN type implementations (file_metadata, file_content, tcp_listener, k8s_resource, etc.).
+- **Makefile Run Targets**: Removed all `run*` targets (`run`, `run-summary`, `run-attestation`, `run-full`, `run-assessor`, `run-batch`, `run-release`, `run-batch-release`, `run-compiler`, `run-compiler-release`) as agent is no longer in this repository.
+- **Cross-Compilation Targets**: Removed `build-windows` and `build-linux` targets (agent-specific).
+- **Install Target**: Removed `make install` (was for agent binary).
+- **Watch Agent Target**: Removed `watch-agent` (agent-specific).
+
+### Notes
+- This release focuses the core ESP repository on the language specification, compiler, and execution engine.
+- Scanner implementations should use the [ESP Agent SDK](https://github.com/scanset/ESP-Agent-SDK) which provides reference collectors, executors, and an example agent application.
+- The core crates (`common`, `compiler`, `execution_engine`) remain fully functional as libraries for building custom scanner implementations.
+
 ## [0.2.0] - 2026-01-08
 
 ### Added

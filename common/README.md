@@ -19,12 +19,14 @@ This crate provides the foundational types used across the ESP toolchain: AST no
 │  │ Criteria│  │ SourceMap│ │ Collector│ │          │           │
 │  └─────────┘  └─────────┘  └─────────┘  └──────────┘           │
 │                                                                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐                       │
-│  │ results  │  │ metadata │  │  crypto  │                       │
-│  │          │  │          │  │          │                       │
-│  │Attestation│ │MetaData  │  │ SHA-256  │                       │
-│  │FullResult│  │Block     │  │ FIPS 140 │                       │
-│  └──────────┘  └──────────┘  └──────────┘                       │
+│  ┌───────────────────────────────────┐  ┌──────────┐            │
+│  │            results                │  │ metadata │            │
+│  │                                   │  │          │            │
+│  │ Attestation │ FullResult │Assessor│  │MetaData  │            │
+│  │ Evidence    │ Finding    │Package │  │Block     │            │
+│  │ Collection  │ Envelope   │        │  │          │            │
+│  │ Method      │ crypto     │        │  │          │            │
+│  └───────────────────────────────────┘  └──────────┘            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -38,6 +40,9 @@ common = { path = "../common" }
 
 # With full results support
 common = { path = "../common", features = ["full-results"] }
+
+# With assessor evidence support
+common = { path = "../common", features = ["assessor-evidence"] }
 ```
 
 ## Quick Start
@@ -55,6 +60,8 @@ use common::{
     metadata::MetaDataBlock,
     // Cryptography
     results::{hash_content, verify_hash},
+    // Collection traceability
+    results::CollectionMethod,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,6 +79,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Hash content for integrity verification
     let hash = hash_content(&ast)?;
     println!("Content hash: {}", hash);
+
+    // Document collection method for traceability
+    let method = CollectionMethod::file_read("/etc/passwd")
+        .with_description("Read file permissions");
 
     // Log events
     log_info!("Processing policy", "file" => "policy.esp");
@@ -99,8 +110,6 @@ for state in &file.definition.states {
 ```
 
 Key types: `EspFile`, `DefinitionNode`, `StateDefinition`, `ObjectDefinition`, `CriteriaNode`, `CriterionNode`, `DataType`, `Operation`, `Value`
-
-📄 [Full documentation](ast/README.md)
 
 ---
 
@@ -153,7 +162,7 @@ logging::print_cargo_style_summary();
 
 Key types: `LogEvent`, `Code`, `ErrorCollector`, `LoggingService`
 
-📄 [Full documentation](logging/README.md)
+📄 [Full documentation: ESP Logging System Specification](../docs/ESP-Logging-System-v1.0.0.md)
 
 ---
 
@@ -178,30 +187,158 @@ if config.logging.use_structured_logging {
 
 Key types: `compile_time::*` constants, `RuntimeConfig`, `LoggingPreferences`
 
-📄 [Full documentation](config/README.md)
+📄 [Full documentation: ESP Configuration System Specification](../docs/ESP-Configuration-System-v1.0.0.md)
 
 ---
 
 ### results
 
-Feature-gated scan result types for secure output handling.
+Scan result types with feature-gated output modes for different security contexts.
 
-```rust
-use common::results::{AttestationBuilder, Outcome, CriteriaCounts};
+#### Architecture
 
-// Build attestation (safe for network transport)
-let mut builder = AttestationBuilder::new("agent-001", "scanner");
-builder.add_check(&metadata, Outcome::Pass, counts)?;
-let attestation = builder.build()?;
+```
+ExecutionManifest (from execution_engine)
+    │
+    ▼ ResultBuilder
+    │
+┌───┴───────────────────────────────────────────┐
+│                                               │
+▼                                               ▼
+AttestationResult                          FullResult
+(feature: attestation)                     (feature: full-results)
+│                                               │
+├── envelope (with signature block)            ├── envelope
+├── summary                                    ├── summary
+└── checks[]                                   └── policies[]
+    ├── identity                                   ├── identity
+    ├── outcome                                    ├── outcome
+    └── weight                                     ├── weight
+                                                   ├── findings[]
+                                                   └── evidence
 ```
 
-Features:
-- `attestation` (default) - Network-safe output without system details
-- `full-results` - Complete evidence for local storage
+#### Content Matrix
 
-Key types: `ScanAttestation`, `CheckAttestation`, `Outcome`, `Criticality`
+| Content              | Attestation | Full Results | Assessor Evidence |
+|----------------------|-------------|--------------|-------------------|
+| Policy ID            | ✓           | ✓            | ✓                 |
+| Outcome              | ✓           | ✓            | ✓                 |
+| Criticality          | ✓           | ✓            | ✓                 |
+| Control mappings     | ✓           | ✓            | ✓                 |
+| Weight               | ✓           | ✓            | ✓                 |
+| Evidence hash        | ✓           | ✓            | ✓                 |
+| Host ID              | ✓           | ✓            | ✓                 |
+| Findings             | ✗           | ✓            | ✓                 |
+| Evidence data        | ✗           | ✓            | ✓                 |
+| Collection method    | ✗           | ✓            | ✓                 |
+| Collection target    | ✗           | ✓            | ✓                 |
+| Collection command   | ✗           | ✗            | ✓                 |
+| Collection inputs    | ✗           | ✗            | ✓                 |
 
-📄 [Full documentation](results/README.md)
+#### Usage Examples
+
+**Building Attestations:**
+
+```rust
+use common::results::{ResultBuilder, CheckInput, Criticality, Outcome};
+
+let builder = ResultBuilder::from_system("agent-001");
+
+let checks = vec![
+    CheckInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass),
+    CheckInput::new("policy-2", "linux", Criticality::Medium, vec![], Outcome::Fail),
+];
+
+let attestation = builder.build_attestation(checks, None)?;
+```
+
+**Building Full Results:**
+
+```rust
+use common::results::{ResultBuilder, PolicyInput, Criticality, Outcome};
+
+let builder = ResultBuilder::from_system("agent-001");
+
+let policies = vec![
+    PolicyInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass)
+        .with_findings(findings)
+        .with_evidence(evidence),
+];
+
+let full_result = builder.build_full_result(policies)?;
+```
+
+Key types (always available): `Outcome`, `Criticality`, `Weight`, `CriteriaCounts`, `ResultCounts`, `ControlMapping`, `PolicyIdentity`, `ResultEnvelope`, `Evidence`, `CollectionMethod`, `ComplianceFinding`, `ResultBuilder`
+
+Feature-gated types:
+- `attestation`: `AttestationResult`, `CheckAttestation`, `AttestationBuilder`, `CheckInput`
+- `full-results`: `FullResult`, `PolicyResult`, `FullResultBuilder`, `PolicyInput`
+- `assessor-evidence`: `AssessorPackage`, `AssessorPolicyResult`, `CollectionCommand`, `ReproducibilityInfo`
+
+---
+
+### results::CollectionMethod
+
+Assessor-grade evidence traceability for documenting how data was collected.
+
+```rust
+use common::results::CollectionMethod;
+
+// Command execution
+let method = CollectionMethod::command("rpm", "-qa openssl")
+    .with_description("Query RPM database for package");
+
+// API call
+let method = CollectionMethod::api("/api/v1/pods", "kube-system")
+    .with_description("Kubernetes API query");
+
+// Direct file read
+let method = CollectionMethod::file_read("/etc/passwd")
+    .with_description("Read file metadata");
+
+// Computed/derived value (no system collection)
+let method = CollectionMethod::computed()
+    .with_description("Value computed from RUN operation");
+```
+
+**Method Types:**
+
+| Method | Constructor | Use Case |
+|--------|-------------|----------|
+| `Command` | `CollectionMethod::command(cmd, target)` | System command execution (`stat`, `rpm`, `kubectl`) |
+| `Api` | `CollectionMethod::api(endpoint, resource)` | REST/gRPC API calls |
+| `FileRead` | `CollectionMethod::file_read(path)` | Direct file access, `/proc/*` reads |
+| `Computed` | `CollectionMethod::computed()` | Derived/calculated values, RUN operation outputs |
+
+**Builder Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `with_description(desc)` | Add human-readable description of collection |
+
+**Integration with CollectedData:**
+
+```rust
+use common::results::CollectionMethod;
+use execution_engine::strategies::CollectedData;
+
+let mut data = CollectedData::new(
+    object.identifier.clone(),
+    "file_metadata".to_string(),
+    "file_collector".to_string(),
+);
+
+// Document how evidence was gathered
+let method = CollectionMethod::command("stat", &path)
+    .with_description("File metadata via stat command");
+data.set_method(method);
+
+// Check if method is recorded
+if data.has_method() {
+    // Method available for assessor reporting
+}
+```
 
 ---
 
@@ -210,7 +347,7 @@ Key types: `ScanAttestation`, `CheckAttestation`, `Outcome`, `Criticality`
 **FIPS 140-3 compliant** cryptographic hashing with platform-native backends.
 
 ```rust
-use common::results::{hash_content, sha256_hash, verify_hash};
+use common::results::{hash_content, sha256_hash, hex_encode};
 
 // Hash serializable content (canonical JSON + SHA-256)
 let hash = hash_content(&my_struct)?;
@@ -218,8 +355,9 @@ let hash = hash_content(&my_struct)?;
 // Hash raw bytes
 let digest = sha256_hash(b"hello world")?;
 
-// Verify content against expected hash
-let valid = verify_hash(&my_struct, &expected_hash)?;
+// Encode/decode hex strings
+let hex_string = hex_encode(&bytes);
+let bytes = hex_decode(&hex_string)?;
 ```
 
 | Platform | Backend | Certification |
@@ -231,9 +369,7 @@ The crypto module is **always available** regardless of feature flags and automa
 
 Key types: `HashingError`
 
-Key functions: `hash_content()`, `sha256_hash()`, `verify_hash()`, `hex_encode()`, `hex_decode()`
-
-📄 [Full documentation](results/README.md#cryptographic-hashing)
+Key functions: `hash_content()`, `sha256_hash()`, `hex_encode()`, `hex_decode()`
 
 ---
 
@@ -283,24 +419,34 @@ use common::ast::nodes::EspFile;
 use common::{Position, Span, SourceMap, Spanned};
 use common::utils::{Position, Span, SourceMap, Spanned};
 
-// Crypto functions (from results module)
-use common::results::{hash_content, verify_hash, sha256_hash};
+// Results types (always available)
+use common::results::{Outcome, Criticality, CollectionMethod, Evidence};
+
+// Crypto functions
+use common::results::{hash_content, sha256_hash, hex_encode, hex_decode};
 ```
 
 ## Feature Flags
 
 | Feature | Default | Description |
 |---------|---------|-------------|
-| `attestation` | ✅ | Network-safe result types |
-| `full-results` | ❌ | Complete results with evidence |
+| `attestation` | ✅ | Network-safe result types (CUI-free) |
+| `full-results` | ❌ | Complete results with evidence (local storage) |
+| `assessor-evidence` | ❌ | Full results with collection commands (implies full-results) |
 
-Note: The `crypto` module is always available regardless of feature flags.
+Note: Core types (`Outcome`, `Criticality`, `CollectionMethod`, `Evidence`, crypto functions) are always available regardless of feature flags.
 
 Enable features in `Cargo.toml`:
 
 ```toml
-# Both modes
+# Attestation only (default)
+common = { path = "../common" }
+
+# Full results with evidence
 common = { path = "../common", features = ["full-results"] }
+
+# Assessor package with reproducibility info
+common = { path = "../common", features = ["assessor-evidence"] }
 ```
 
 ## Platform Support
@@ -339,17 +485,25 @@ common/
 │   │   ├── constants.rs # Compile-time limits
 │   │   └── runtime.rs   # Runtime preferences
 │   ├── results/
-│   │   ├── mod.rs       # Feature-gated exports
-│   │   ├── error.rs     # ResultError type
-│   │   ├── crypto/      # FIPS 140-3 compliant hashing
-│   │   │   ├── mod.rs       # Platform-agnostic interface
-│   │   │   ├── canonical.rs # Canonical JSON serialization
-│   │   │   ├── openssl.rs   # Linux/Unix backend
-│   │   │   └── windows.rs   # Windows CNG backend
-│   │   ├── common/      # Shared types (Outcome, Criticality, etc.)
-│   │   ├── attestation/ # Network-safe output
-│   │   └── full/        # Complete results with evidence
-│   └── metadata.rs      # MetaDataBlock
+│   │   ├── mod.rs               # Feature-gated exports
+│   │   ├── error.rs             # ResultError type
+│   │   ├── common/              # Shared types (Outcome, Criticality, etc.)
+│   │   ├── collection_method.rs # CollectionMethod for traceability
+│   │   ├── envelope.rs          # ResultEnvelope, AgentInfo, HostInfo
+│   │   ├── evidence.rs          # Evidence, CollectionRecord
+│   │   ├── finding.rs           # ComplianceFinding, FindingBuilder
+│   │   ├── identity.rs          # PolicyIdentity
+│   │   ├── summary.rs           # ScanSummary, ExecutionSummary
+│   │   ├── builder.rs           # ResultBuilder
+│   │   ├── crypto/              # FIPS 140-3 compliant hashing
+│   │   │   ├── mod.rs           # Platform-agnostic interface
+│   │   │   ├── canonical.rs     # Canonical JSON serialization
+│   │   │   ├── openssl.rs       # Linux/Unix backend
+│   │   │   └── windows.rs       # Windows CNG backend
+│   │   ├── attestation/         # Network-safe output (feature: attestation)
+│   │   ├── full/                # Complete results (feature: full-results)
+│   │   └── assessor/            # Assessor packages (feature: assessor-evidence)
+│   └── metadata.rs              # MetaDataBlock
 └── README.md
 ```
 
@@ -358,8 +512,7 @@ common/
 | Crate | Description |
 |-------|-------------|
 | `compiler` | ESP parser that produces AST |
-| `agent_core` | Execution engine that consumes AST |
-| `contract_kit` | Scanner library with collectors and executors |
+| `execution_engine` | Execution engine with CTN strategies |
 
 ## License
 

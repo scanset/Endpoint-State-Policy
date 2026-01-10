@@ -2,7 +2,7 @@
 
 **Version:** 1.0.0
 **Status:** Normative
-**Last Updated:** 2026-01-23
+**Last Updated:** 2026-01-09
 
 ---
 
@@ -770,7 +770,7 @@ ESP's trust model aligns with NIST Secure Software Development Framework:
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.0.0 | 2026-01-23 | Added Summary and Assessor Package formats |
+| 1.0.0 | 2026-01-09 | Added Summary and Assessor Package formats |
 |       |            | Updated output architecture diagram |
 |       |            | Added reproducibility section |
 |       |            | Added auditor implications |

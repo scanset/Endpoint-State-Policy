@@ -21,7 +21,7 @@ Endpoint State Policy (ESP) is a platform-agnostic policy language that separate
               ┌──────────────┴──────────────┐
               ▼                              ▼
 ┌──────────────────────┐      ┌──────────────────────┐
-│      Compiler        │      │   execution_engine   │
+│      Compiler        │      │   Execution Engine   │
 │                      │      │                      │
 │ • Syntax validation  │      │ • Resolution engine  │
 │ • Type checking      │      │ • Execution engine   │
@@ -37,35 +37,65 @@ Endpoint State Policy (ESP) is a platform-agnostic policy language that separate
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Core Philosophy
+---
 
-**Policy as Data, Not Code**
+## Why ESP?
+
+Traditional compliance automation (SCAP/XCCDF) suffers from:
+
+- **Verbose, fragile XML** — Policies are difficult to read, write, and maintain
+- **Tight coupling** — Policy definition is intertwined with scanner implementation
+- **Poor extensibility** — Adding new check types requires modifying the standard
+- **High cost** — Authoring and maintaining policies requires specialized expertise
+
+ESP addresses these problems by:
+
+- **Separating policy from execution** — Policies describe *what* should be true, scanners decide *how* to check it
+- **Using a typed, validated DSL** — Catch errors at compile time, not during scans
+- **Enforcing contracts** — CTN types define clear interfaces between policies and implementations
+- **Human and machine readable** — Policies are inspectable by auditors and parseable by tools
+
+ESP focuses on **technical controls** — controls validated by inspecting endpoint state.
+
+---
+
+## Core Philosophy
+
+### Policy as Data, Not Code
 
 ESP policies describe *what* should be true, not *how* to check it. This separation enables:
-- Policy authors to focus on security intent
-- Scanner implementers to optimize execution
-- Auditors to inspect policies without reading code
-- Organizations to share policies across different platforms
 
-**Fail-Fast Compiler**
+- **Policy authors** to focus on security intent without implementation details
+- **Scanner implementers** to optimize execution for their platform
+- **Auditors** to inspect policies without reading code
+- **Organizations** to share policies across different scanner implementations
 
-The compiler enforces strict validation at compile time:
-- Syntax and grammar validation
-- Type compatibility checking
-- Reference resolution and cycle detection
-- Security limits baked into the binary (SSDF compliant)
+### Fail-Fast Compiler
 
-Errors are caught before execution, not during a scan.
+The compiler enforces strict validation at compile time through a 7-pass pipeline:
 
-**Constrained Execution**
+1. File processing with UTF-8 and size validation
+2. Lexical analysis with token limits
+3. Syntax validation and AST construction
+4. Symbol discovery and table building
+5. Reference resolution and cycle detection
+6. Semantic analysis and type checking
+7. Structural validation and limit enforcement
+
+Errors are caught before execution, not during a scan. Security limits are baked into the binary at compile time (SSDF compliant).
+
+### Constrained Execution
 
 The runtime engine operates within strict boundaries:
-- Whitelisted command execution only
-- Deterministic evaluation order
-- Repeatable evidence generation
-- No code injection from policy files
 
-### Trust Model
+- **Whitelisted command execution** — Only approved commands can run
+- **Deterministic evaluation order** — Same policy produces same results
+- **Repeatable evidence generation** — Collection methods are documented
+- **No code injection** — Policies cannot execute arbitrary code
+
+---
+
+## Trust Model
 
 ESP enforces trust boundaries at every stage:
 
@@ -105,25 +135,7 @@ ESP enforces trust boundaries at every stage:
 | Capabilities | Privilege escalation |
 | Results | Information leakage |
 
-See [Trust Model](docs/Trust_Model.md) for complete details.
-
----
-
-## What Problem ESP Solves
-
-Traditional compliance automation (SCAP/XCCDF) suffers from:
-- Verbose, fragile XML
-- Tight coupling between policy and execution
-- Poor extensibility
-- High authoring and maintenance cost
-
-ESP addresses this by:
-- Separating policy definition from scanner implementation
-- Using a typed, validated DSL
-- Enforcing contracts between collectors and executors
-- Making policies readable by humans and machines
-
-ESP focuses on **technical controls** — controls validated by inspecting endpoint state.
+📄 See [ESP Trust Model](docs/10_ESP_Trust_Model_v1_0_0.md) for complete details.
 
 ---
 
@@ -148,36 +160,40 @@ This repository includes a **VS Code Dev Container** for fast setup:
    ```
 4. Click "Reopen in Container" when prompted
 
-### Build and Run
+### Build
 
 ```bash
-# Build
+# Build all crates
 cargo build --workspace
 
-# Run scans on example policies
-make run ESP=esp/
+# Run tests
+make test
+
+# Run linting
+make lint
 ```
 
-### Example Policies
+### Validate ESP Files (Compiler Only)
 
-See the [`esp/`](esp/) directory for example policies demonstrating:
-- File metadata validation (`test_file_metadata.esp`)
-- File content validation (`test_file_content.esp`)
-- TCP listener validation (`test_tcp_listener.esp`)
+```bash
+# Compile a single file
+cargo run -p compiler -- policy.esp
+
+# Compile a directory
+cargo run -p compiler -- policies/
+```
 
 ---
 
 ## Architecture
 
-### Component Responsibilities
+### Crate Overview
 
-| Component | Purpose |
-|-----------|---------|
-| **common** | Shared types: AST, logging, config, results, crypto |
-| **compiler** | Parse and validate ESP files (7-pass pipeline) |
-| **execution_engine** | Resolution and execution framework |
-| **contract_kit** | Reference collectors, executors, contracts |
-| **agent** | Reference CLI application |
+| Crate | Purpose |
+|-------|---------|
+| **common** | Shared types: AST, logging, configuration, results, FIPS 140-3 cryptography |
+| **compiler** | Parse and validate ESP files through 7-pass pipeline |
+| **execution_engine** | Resolution engine, execution framework, strategy system |
 
 ### Data Flow
 
@@ -192,13 +208,37 @@ policy.esp
                              │ Validated AST
                              ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    execution_engine                         │
+│                    Execution Engine                         │
 │  Conversion → Resolution → Execution → Results              │
 └────────────────────────────┬────────────────────────────────┘
                              │
                              ▼
-                      ScanResult (JSON)
+                    Compliance Results
 ```
+
+### Compiler Pipeline
+
+The compiler transforms ESP source through seven distinct passes:
+
+| Pass | Module | Purpose |
+|------|--------|---------|
+| 1 | `file_processor` | UTF-8 validation, size limits, encoding |
+| 2 | `lexical` | Token stream generation |
+| 3 | `syntax` | Grammar validation, AST construction |
+| 4 | `symbols` | Symbol table building |
+| 5 | `reference_resolution` | Cross-reference validation, cycle detection |
+| 6 | `semantic_analysis` | Type checking, runtime operation validation |
+| 7 | `validation` | Structural requirements, implementation limits |
+
+### Execution Engine
+
+The execution engine consumes validated AST and produces compliance results:
+
+| Phase | Purpose |
+|-------|---------|
+| Conversion | Transform AST to execution types |
+| Resolution | Variable substitution, SET expansion, dependency ordering |
+| Execution | Data collection, state validation, evidence generation |
 
 ---
 
@@ -206,27 +246,98 @@ policy.esp
 
 ESP can express technical controls from any framework with observable requirements:
 
-- **NIST SP 800-53** / **800-171**
-- **MITRE ATT&CK** (detection-oriented)
-- **DISA STIGs**
-- **CIS Benchmarks**
-- **Custom organizational baselines**
+| Framework | Example Use |
+|-----------|-------------|
+| **NIST SP 800-53 / 800-171** | Configuration management controls |
+| **MITRE ATT&CK** | Detection-oriented validation |
+| **DISA STIGs** | Security configuration baselines |
+| **CIS Benchmarks** | Hardening verification |
+| **Custom baselines** | Organization-specific requirements |
 
 ESP answers: *"Is this endpoint in the required technical state?"*
 
 ---
 
-## CTN Types
+## ESP Agent SDK
 
-| Type | Platform | Purpose |
-|------|----------|---------|
-| `file_metadata` | Linux/Windows | Permissions, owner, size, existence |
-| `file_content` | Linux/Windows | Content validation (contains, pattern_match) |
-| `json_record` | Linux/Windows | Structured JSON field validation |
-| `tcp_listener` | Linux | TCP port listening state |
-| `k8s_resource` | Kubernetes | Kubernetes API resource validation |
+For building scanners that execute ESP policies, see the **ESP Agent SDK**:
 
-See [contract_kit/docs/](contract_kit/docs/) for complete CTN type reference.
+🔗 **[github.com/scanset/ESP-Agent-SDK](https://github.com/scanset/ESP-Agent-SDK)**
+
+The SDK provides:
+- Reference CTN type implementations (file_metadata, file_content, tcp_listener, etc.)
+- Collector and executor patterns
+- Example agent application
+- Contract development guide
+
+---
+
+## Design Partners Wanted
+
+**ScanSet** is building the Compliance Evidence Layer — infrastructure that produces cryptographically verifiable proof of compliance, continuously. We're seeking **design partners** to shape the orchestration and integration layers.
+
+### What We're Building
+
+ESP is the policy engine. ScanSet is the infrastructure that operationalizes it:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    ScanSet Evidence Layer                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌─────────────┐     ┌─────────────────┐     ┌─────────────────┐   │
+│  │   Policy    │     │  Orchestration  │     │     Trust       │   │
+│  │  (ESP Core) │────▶│     Layer       │────▶│ Infrastructure  │   │
+│  │             │     │                 │     │                 │   │
+│  │ • Compiler  │     │ • Agent mgmt    │     │ • Signing       │   │
+│  │ • Engine    │     │ • Policy routing│     │ • Attestations  │   │
+│  │ • Contracts │     │ • Evidence flow │     │ • Verification  │   │
+│  └─────────────┘     └─────────────────┘     └─────────────────┘   │
+│                              │                                      │
+│                              ▼                                      │
+│                    ┌─────────────────┐                             │
+│                    │   Connectors    │                             │
+│                    │                 │                             │
+│                    │ • SIEM / SOAR   │                             │
+│                    │ • GRC Platforms │                             │
+│                    │ • Threat Models │                             │
+│                    │ • AI Agents     │                             │
+│                    └─────────────────┘                             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### What Design Partners Get
+
+- **Early access** to orchestration and trust infrastructure
+- **Custom connector development** for your SIEM/SOAR (Splunk, Sentinel, ServiceNow, etc.)
+- **Direct input** on API design and integration patterns
+- **Priority support** during implementation
+
+### What We're Looking For
+
+| Profile | Why You'd Be a Great Fit |
+|---------|--------------------------|
+| **Federal Contractors** | FedRAMP/FISMA continuous monitoring, 3PAO evidence packages |
+| **Regulated SaaS** | SOC 2 evidence automation, customer audit responses |
+| **Cloud-Native Teams** | GitOps integration, CI/CD compliance gates |
+| **MSPs / MSSPs** | Multi-tenant evidence collection, client reporting |
+
+### The Vision
+
+Compliance outcomes should be **provable, not explained**:
+
+- **Attestations flow to your SIEM** — failed controls become security events
+- **SOAR playbooks trigger automatically** — remediation closes the loop with signed proof
+- **Threat models update in real-time** — attack paths light up when controls fail
+- **3PAO audits become queries** — not quarterly fire drills
+
+### Get Involved
+
+📧 **Contact**: curtis@scanset.io
+
+🌐 **Learn more**: [scanset.io](https://scanset.io)
+
+We're not looking for customers yet — we're looking for partners who want to shape how compliance evidence infrastructure gets built.
 
 ---
 
@@ -234,41 +345,68 @@ See [contract_kit/docs/](contract_kit/docs/) for complete CTN type reference.
 
 | Command | Description |
 |---------|-------------|
-| `make build` | Build the agent |
-| `make run ESP=<path>` | Run agent on file or directory |
-| `make run-compiler ESP=<path>` | Run compiler only |
+| `make build` | Build all crates |
 | `make test` | Run all tests |
+| `make test-unit` | Run unit tests only |
 | `make lint` | Run strict clippy checks |
+| `make format` | Format code |
+| `make docs` | Generate documentation |
+| `make pre-commit` | Run all checks before commit |
 
 ---
 
 ## Documentation
 
+### ESP Language Specification
+
 | Document | Description |
 |----------|-------------|
-| [ESP Language Guide](docs/ESP_Language_Guide.md) | Complete language reference |
-| [EBNF Grammar](docs/EBNF.md) | Formal grammar specification |
-| [Trust Model](docs/Trust_Model.md) | Security boundaries and guarantees |
-| [Contract Development Guide](docs/Contract_Development_Guide.md) | Building custom CTN types |
-| [CTN Type Reference](contract_kit/docs/) | Collector/executor documentation |
+| [ESP Overview](docs/01_ESP_Overview_v1_0_0.md) | Language introduction and concepts |
+| [Lexical Rules](docs/02_ESP_Lexical_Rules_v1_0_0.md) | Token definitions and lexical structure |
+| [Grammar EBNF](docs/03_ESP_Grammar_EBNF_v1_0_0.md) | Formal grammar specification |
+| [Type System](docs/04_ESP_Type_System_v1_0_0.md) | Data types and type compatibility |
+| [Symbol Resolution](docs/05_ESP_Symbol_Resolution_v1_0_0.md) | Symbol tables and reference resolution |
+| [Evaluation Semantics](docs/06_ESP_Evaluation_Semantics_v1_0_0.md) | Runtime evaluation rules |
+| [Meta Requirements](docs/07_ESP_Meta_Requirements_v1_0_0.md) | Structural requirements |
+| [Error Model](docs/08_ESP_Error_Model_v1_0_0.md) | Error codes and handling |
+| [Canonical Schema](docs/09_ESP_Canonical_Schema_v1_0_0.md) | Output format specification |
+| [Trust Model](docs/10_ESP_Trust_Model_v1_0_0.md) | Security boundaries and trust |
+| [Configuration](docs/11_ESP_Configuration_v1_0_0.md) | Build and runtime configuration |
+| [Logging](docs/12_ESP_Logging_v1_0_0.md) | Logging system specification |
+
+### Crate Documentation
+
+| Crate | README |
+|-------|--------|
+| common | [common/README.md](common/README.md) |
+| compiler | [compiler/README.md](compiler/README.md) |
+| execution_engine | [execution_engine/README.md](execution_engine/README.md) |
 
 ---
 
 ## Platform Support
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| Linux | ✅ Full | Primary development platform |
-| macOS | ✅ Full | Requires OpenSSL via Homebrew |
-| Windows | ✅ Full | Uses native CNG APIs |
+| Platform | Cryptography | Status |
+|----------|--------------|--------|
+| Linux | OpenSSL FIPS | ✅ Full support |
+| macOS | OpenSSL | ✅ Full support (requires Homebrew OpenSSL) |
+| Windows | CNG (BCrypt) | ✅ Full support (native, no dependencies) |
+
+Cross-compilation from Linux to Windows is supported without bundling OpenSSL.
 
 ---
 
 ## Security
 
+### Design Principles
+
 - **No code execution** — Policies are data, not scripts
 - **Whitelisted commands** — Only approved commands can execute
 - **FIPS 140-3 cryptography** — Platform-native certified implementations
+- **Compile-time limits** — Security boundaries baked into binary
+- **Mandatory audit logging** — Security events always logged
+
+### Reporting Vulnerabilities
 
 For security vulnerabilities, contact **curtis@scanset.io**.
 
@@ -276,7 +414,7 @@ For security vulnerabilities, contact **curtis@scanset.io**.
 
 ## License
 
-Apache 2.0
+Apache 2.0 — See [LICENSE](LICENSE) for details.
 
 ---
 

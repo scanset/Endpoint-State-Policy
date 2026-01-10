@@ -2,7 +2,7 @@
 
 **Version:** 1.0.0
 **Status:** Normative
-**Last Updated:** 2026-01-23
+**Last Updated:** 2026-01-09
 
 ---
 
@@ -816,7 +816,7 @@ if !schema_version.starts_with("1.") {
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2026-01-08 | Initial v1.0.0 specification |
-| 1.0.1 | 2026-01-23 | Updated to match actual implementation output |
+|       |              Updated to match actual implementation output |
 |       |            | Added single envelope design (all policies in one result) |
 |       |            | Updated field names (`control_id` vs `control`) |
 |       |            | Added assessor package schema (Section 11) |

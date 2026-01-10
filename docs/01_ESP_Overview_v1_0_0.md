@@ -2,7 +2,7 @@
 
 **Version:** 1.0.0
 **Status:** Normative
-**Last Updated:** 2026-01-23
+**Last Updated:** 2026-01-09
 
 ---
 
@@ -390,7 +390,7 @@ esp_agent /path/to/policies/
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 1.0.0 | 2026-01-23 | Added Summary and Assessor Package formats |
+| 1.0.0 | 2026-01-09 | Added Summary and Assessor Package formats |
 |       |            | Added single envelope design section |
 |       |            | Updated architecture diagrams |
 |       |            | Added format selection table |

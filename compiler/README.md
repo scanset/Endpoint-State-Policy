@@ -259,6 +259,8 @@ let tokens = lexical::tokenize_file_result(file_result)?;
 let analyzer = lexical::create_analyzer();
 ```
 
+📄 See [ESP Lexical Rules](../docs/02_ESP_Lexical_Rules_v1_0_0.md)
+
 ---
 
 ### `tokens`
@@ -290,6 +292,8 @@ if is_reserved_keyword("DEF") {
 }
 ```
 
+📄 See [ESP Grammar EBNF](../docs/03_ESP_Grammar_EBNF_v1_0_0.md)
+
 ---
 
 ### `syntax`
@@ -302,6 +306,8 @@ use compiler::syntax;
 let ast = syntax::parse_esp_file(tokens)?;
 syntax::validate_grammar_integration()?;
 ```
+
+📄 See [ESP Grammar EBNF](../docs/03_ESP_Grammar_EBNF_v1_0_0.md)
 
 ---
 
@@ -321,6 +327,8 @@ let strict = symbols::discover_symbols_strict(ast)?;       // With naming valida
 let minimal = symbols::discover_symbols_minimal(ast)?;     // Performance-optimized
 ```
 
+📄 See [ESP Symbol Resolution](../docs/05_ESP_Symbol_Resolution_v1_0_0.md)
+
 ---
 
 ### `reference_resolution`
@@ -337,6 +345,8 @@ let result = reference_resolution::validate_references_and_basic_dependencies(
 )?;
 ```
 
+📄 See [ESP Symbol Resolution](../docs/05_ESP_Symbol_Resolution_v1_0_0.md)
+
 ---
 
 ### `semantic_analysis`
@@ -351,6 +361,8 @@ let result = semantic_analysis::analyze_semantics(ast, symbols, refs)?;
 // Quick validation
 let is_valid = semantic_analysis::quick_validate(ast, symbols, refs);
 ```
+
+📄 See [ESP Type System](../docs/04_ESP_Type_System_v1_0_0.md) and [ESP Evaluation Semantics](../docs/06_ESP_Evaluation_Semantics_v1_0_0.md)
 
 ---
 
@@ -368,6 +380,8 @@ let result = validation::validate_structure_and_limits(
 println!("Valid: {}", result.is_valid);
 println!("Max nesting: {}", result.max_nesting_depth);
 ```
+
+📄 See [ESP Meta Requirements](../docs/07_ESP_Meta_Requirements_v1_0_0.md)
 
 ---
 
@@ -497,6 +511,8 @@ The build script enforces absolute maximum values:
 
 Production builds have stricter limits (50MB files, 10 minute timeout).
 
+📄 See [ESP Configuration System](../docs/11_ESP_Configuration_v1_0_0.md)
+
 ### Runtime Configuration (User Preferences)
 
 Runtime preferences customize behavior within security boundaries via environment variables.
@@ -519,7 +535,7 @@ ESP_LOGGING_MIN_LEVEL=info
 ESP_LOGGING_CARGO_STYLE=true
 ```
 
-See [common/config](../common/config/README.md) for complete environment variable reference.
+📄 See [ESP Configuration System](../docs/11_ESP_Configuration_v1_0_0.md) and [ESP Logging System](../docs/12_ESP_Logging_v1_0_0.md)
 
 ## API Reference
 
@@ -594,6 +610,8 @@ match pipeline::process_file("example.esp") {
     }
 }
 ```
+
+📄 See [ESP Error Model](../docs/08_ESP_Error_Model_v1_0_0.md)
 
 ## Examples
 
@@ -749,9 +767,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Related Documentation
 
-- [common crate](../common/README.md) - Shared types (AST, logging, config, results)
-- [EBNF Grammar](../docs/EBNF.md) - Complete ESP language specification
-- [agent_core](../agent_core/README.md) - Execution engine for compiled policies
+### ESP Language Specification
+
+| Document | Description |
+|----------|-------------|
+| [ESP Overview](../docs/01_ESP_Overview_v1_0_0.md) | Language introduction and concepts |
+| [Lexical Rules](../docs/02_ESP_Lexical_Rules_v1_0_0.md) | Token definitions and lexical structure |
+| [Grammar EBNF](../docs/03_ESP_Grammar_EBNF_v1_0_0.md) | Complete grammar specification |
+| [Type System](../docs/04_ESP_Type_System_v1_0_0.md) | Data types and type compatibility |
+| [Symbol Resolution](../docs/05_ESP_Symbol_Resolution_v1_0_0.md) | Symbol tables and reference resolution |
+| [Evaluation Semantics](../docs/06_ESP_Evaluation_Semantics_v1_0_0.md) | Runtime evaluation rules |
+| [Meta Requirements](../docs/07_ESP_Meta_Requirements_v1_0_0.md) | Structural requirements |
+| [Error Model](../docs/08_ESP_Error_Model_v1_0_0.md) | Error codes and handling |
+| [Canonical Schema](../docs/09_ESP_Canonical_Schema_v1_0_0.md) | Output format specification |
+| [Trust Model](../docs/10_ESP_Trust_Model_v1_0_0.md) | Security boundaries and trust |
+| [Configuration](../docs/11_ESP_Configuration_v1_0_0.md) | Build and runtime configuration |
+| [Logging](../docs/12_ESP_Logging_v1_0_0.md) | Logging system specification |
+
+### Related Crates
+
+| Crate | Description |
+|-------|-------------|
+| [common](../common/README.md) | Shared types (AST, logging, config, results) |
+| [execution_engine](../execution_engine/README.md) | Execution engine for compiled policies |
 
 ## License
 
