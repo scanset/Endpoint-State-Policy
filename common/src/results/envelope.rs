@@ -114,65 +114,147 @@ impl Default for ResultEnvelope {
     }
 }
 
+// ============================================================================
+// REPLACE the existing SignatureBlock struct and impl in envelope.rs with this:
+// ============================================================================
+
 /// Cryptographic signature block
 ///
-/// Intentionally implementation-agnostic. Implementations can use
-/// TPM, HSM, software keys, or any other signing mechanism.
+/// Contains a digital signature over the envelope's content_hash and
+/// evidence_hash fields. Designed for self-contained verification (Level 0)
+/// where the public key is included directly.
+///
+/// ## Signed Data
+///
+/// The signature covers `SHA256(content_hash || evidence_hash)` where
+/// `||` denotes concatenation of the hash strings.
+///
+/// ## Verification
+///
+/// For Level 0 (self-contained) verification:
+/// 1. Extract `public_key` from this block
+/// 2. Reconstruct signed data: `SHA256(envelope.content_hash || envelope.evidence_hash)`
+/// 3. Verify `signature` over signed data using `public_key` and `algorithm`
+///
+/// For Level 1+ (PKI) verification:
+/// 1. Validate `certificate_chain` against trusted CA
+/// 2. Extract public key from leaf certificate
+/// 3. Proceed with verification as above
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignatureBlock {
-    /// Signing algorithm used
+    /// Unique identifier for the signer
     ///
-    /// Examples: "ecdsa-p256", "ed25519", "rsa-pss-sha256", "tpm-ecdsa-p256"
+    /// Format depends on backend:
+    /// - TPM: `"tpm:sha256:<fingerprint>"` (fingerprint of public key)
+    /// - Software: `"software:sha256:<fingerprint>"`
+    pub signer_id: String,
+
+    /// Type of signer
+    ///
+    /// Currently always `"agent"`. Reserved for future use:
+    /// `"controller"`, `"assessor"`, `"witness"`
+    pub signer_type: String,
+
+    /// Signing algorithm identifier
+    ///
+    /// Values:
+    /// - `"tpm-ecdsa-p256"` - TPM-backed ECDSA with P-256 curve
+    /// - `"ecdsa-p256"` - Software ECDSA with P-256 curve
     pub algorithm: String,
 
-    /// Key identifier for verification lookup
+    /// Base64-encoded public key
     ///
-    /// Format is implementation-specific. Could be:
-    /// - Key fingerprint
-    /// - TPM handle
-    /// - HSM key ID
-    /// - Certificate subject
-    pub key_id: String,
+    /// Format depends on algorithm:
+    /// - TPM: Windows ECCPUBLICBLOB format
+    /// - Software: SEC1 compressed or uncompressed point
+    ///
+    /// Included for self-contained (Level 0) verification.
+    pub public_key: String,
 
     /// Base64-encoded signature value
-    pub value: String,
+    ///
+    /// Format depends on algorithm:
+    /// - ECDSA: DER-encoded or raw R||S (64 bytes for P-256)
+    pub signature: String,
+
+    /// Key identifier for external lookup
+    ///
+    /// Format depends on backend:
+    /// - TPM: `"tpm:ephemeral:<key_name>"`
+    /// - Software: `"software:ephemeral:<uuid>"`
+    ///
+    /// Used when public key is not embedded or for audit trails.
+    pub key_id: String,
 
     /// When signature was created (ISO 8601)
+    ///
+    /// Note: This timestamp is NOT part of the signed data.
+    /// It records when the signature was created, not when the scan ran.
     pub signed_at: String,
 
-    /// Optional certificate chain (PEM or base64 DER)
+    /// Fields covered by this signature
     ///
-    /// Used for certificate-based verification
+    /// For v1.0, always `["content_hash", "evidence_hash"]`.
+    /// The signature is over `SHA256(content_hash || evidence_hash)`.
+    pub covers: Vec<String>,
+
+    /// Optional X.509 certificate chain (PEM or base64 DER)
+    ///
+    /// For Level 1+ verification. Chain order:
+    /// - `[0]` = leaf (signing certificate)
+    /// - `[1]` = intermediate CA
+    /// - `[n]` = root CA (optional, may be in trust store)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub certificate_chain: Option<Vec<String>>,
 }
 
 impl SignatureBlock {
     /// Create a new signature block
+    ///
+    /// # Arguments
+    ///
+    /// * `signer_id` - Unique identifier for the signer
+    /// * `algorithm` - Signing algorithm (e.g., "tpm-ecdsa-p256")
+    /// * `public_key` - Base64-encoded public key
+    /// * `signature` - Base64-encoded signature value
+    /// * `key_id` - Key identifier for external lookup
+    /// * `covers` - Fields covered by signature (e.g., ["content_hash", "evidence_hash"])
     pub fn new(
+        signer_id: impl Into<String>,
         algorithm: impl Into<String>,
+        public_key: impl Into<String>,
+        signature: impl Into<String>,
         key_id: impl Into<String>,
-        value: impl Into<String>,
+        covers: Vec<String>,
     ) -> Self {
         Self {
+            signer_id: signer_id.into(),
+            signer_type: "agent".to_string(),
             algorithm: algorithm.into(),
+            public_key: public_key.into(),
+            signature: signature.into(),
             key_id: key_id.into(),
-            value: value.into(),
             signed_at: current_timestamp(),
+            covers,
             certificate_chain: None,
         }
     }
 
-    /// Set the signed timestamp
+    /// Set the signed timestamp explicitly
     pub fn with_signed_at(mut self, timestamp: impl Into<String>) -> Self {
         self.signed_at = timestamp.into();
         self
     }
 
-    /// Add certificate chain
+    /// Add certificate chain for PKI verification
     pub fn with_certificate_chain(mut self, chain: Vec<String>) -> Self {
         self.certificate_chain = Some(chain);
         self
+    }
+
+    /// Create standard covers for envelope hash signing
+    pub fn standard_covers() -> Vec<String> {
+        vec!["content_hash".to_string(), "evidence_hash".to_string()]
     }
 }
 
@@ -372,15 +454,6 @@ mod tests {
     }
 
     #[test]
-    fn test_signature_block() {
-        let sig = SignatureBlock::new("ecdsa-p256", "key-123", "base64signature");
-
-        assert_eq!(sig.algorithm, "ecdsa-p256");
-        assert_eq!(sig.key_id, "key-123");
-        assert!(!sig.signed_at.is_empty());
-    }
-
-    #[test]
     fn test_evidence_matches() {
         let agent = AgentInfo::default();
         let host = HostInfo::default();
@@ -404,5 +477,42 @@ mod tests {
         assert!(!host.id.is_empty());
         assert!(!host.os.is_empty());
         assert!(!host.arch.is_empty());
+    }
+
+    #[test]
+    fn test_signature_block() {
+        let sig = SignatureBlock::new(
+            "tpm:sha256:abcd1234",
+            "tpm-ecdsa-p256",
+            "BASE64_PUBLIC_KEY",
+            "BASE64_SIGNATURE",
+            "tpm:ephemeral:ESP_EPHEMERAL_test",
+            SignatureBlock::standard_covers(),
+        );
+
+        assert_eq!(sig.signer_id, "tpm:sha256:abcd1234");
+        assert_eq!(sig.signer_type, "agent");
+        assert_eq!(sig.algorithm, "tpm-ecdsa-p256");
+        assert_eq!(sig.public_key, "BASE64_PUBLIC_KEY");
+        assert_eq!(sig.signature, "BASE64_SIGNATURE");
+        assert_eq!(sig.covers, vec!["content_hash", "evidence_hash"]);
+        assert!(!sig.signed_at.is_empty());
+        assert!(sig.certificate_chain.is_none());
+    }
+
+    #[test]
+    fn test_signature_block_with_certificate() {
+        let sig = SignatureBlock::new(
+            "software:sha256:efgh5678",
+            "ecdsa-p256",
+            "BASE64_PUBLIC_KEY",
+            "BASE64_SIGNATURE",
+            "software:ephemeral:test-uuid",
+            SignatureBlock::standard_covers(),
+        )
+        .with_certificate_chain(vec!["CERT1".to_string(), "CERT2".to_string()]);
+
+        assert!(sig.certificate_chain.is_some());
+        assert_eq!(sig.certificate_chain.unwrap().len(), 2);
     }
 }
