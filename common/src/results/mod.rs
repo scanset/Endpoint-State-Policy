@@ -31,6 +31,12 @@
 //! - `full-results` - Complete results with evidence (local storage only)
 //! - `assessor-evidence` - Full results with collection commands (implies full-results)
 //!
+//! ## Hash Architecture
+//!
+//! All output formats use pre-computed hashes from `ExecutionManifest`. The hashes
+//! are computed ONCE during execution and passed through unchanged to ensure
+//! consistency across all output formats.
+//!
 //! ## Content Matrix
 //!
 //! | Content              | Attestation | Full Results | Assessor Evidence |
@@ -41,6 +47,7 @@
 //! | Control mappings     | ✓           | ✓            | ✓                 |
 //! | Weight               | ✓           | ✓            | ✓                 |
 //! | Evidence hash        | ✓           | ✓            | ✓                 |
+//! | Content hash         | ✓           | ✓            | ✓                 |
 //! | Host ID              | ✓           | ✓            | ✓                 |
 //! | Findings             | ✗           | ✓            | ✓                 |
 //! | Evidence data        | ✗           | ✓            | ✓                 |
@@ -63,7 +70,12 @@
 //!     CheckInput::new("policy-2", "linux", Criticality::Medium, vec![], Outcome::Fail),
 //! ];
 //!
-//! let attestation = builder.build_attestation(checks, None)?;
+//! // Pre-computed hashes from ExecutionManifest
+//! let attestation = builder.build_attestation(
+//!     checks,
+//!     manifest.content_hash,
+//!     manifest.evidence_hash,
+//! )?;
 //! ```
 //!
 //! ### Building Full Results
@@ -79,7 +91,12 @@
 //!         .with_evidence(evidence),
 //! ];
 //!
-//! let full_result = builder.build_full_result(policies)?;
+//! // Pre-computed hashes from ExecutionManifest
+//! let full_result = builder.build_full_result(
+//!     policies,
+//!     manifest.content_hash,
+//!     manifest.evidence_hash,
+//! )?;
 //! ```
 
 // ============================================================================
@@ -166,6 +183,9 @@ pub use assessor::{
     AssessorPackage, AssessorPackageBuilder, AssessorPolicyResult, CollectionCommand, PackageInfo,
     ReproducibilityInfo,
 };
+
+#[cfg(feature = "assessor-evidence")]
+pub use builder::AssessorInput;
 
 /// Primary assessor package type (feature: assessor-evidence)
 #[cfg(feature = "assessor-evidence")]
