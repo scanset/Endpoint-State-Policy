@@ -2,7 +2,7 @@
 
 **Version:** 1.0.0
 **Status:** Normative
-**Last Updated:** 2026-01-09
+**Last Updated:** 2026-01-10
 
 ---
 
@@ -39,15 +39,16 @@ ScanResult (per policy)
 | **Complete** | Contains all execution data needed for each output mode |
 | **Verifiable** | Evidence hash enables attestation/full result correlation |
 | **Serializable** | JSON format for interoperability |
+| **Signable** | Cryptographic signatures bind results to agent identity |
 
 ### 2.3 Output Format Selection
 
-| Output Format | Evidence Data | Findings | Collection Methods | Commands/Inputs | Reproducibility |
-|---------------|---------------|----------|-------------------|-----------------|-----------------|
-| `summary` | No | No | No | No | No |
-| `attestation` | Hash only | No | Type only | No | No |
-| `full` | Full | Yes | Full | No | No |
-| `assessor` | Full | Yes | Full | Yes | Yes |
+| Output Format | Evidence Data | Findings | Collection Methods | Commands/Inputs | Reproducibility | Signature |
+|---------------|---------------|----------|-------------------|-----------------|-----------------|-----------|
+| `summary` | No | No | No | No | No | No |
+| `attestation` | Hash only | No | Type only | No | No | Yes |
+| `full` | Full | Yes | Full | No | No | Yes |
+| `assessor` | Full | Yes | Full | Yes | Yes | Yes |
 
 ---
 
@@ -67,7 +68,8 @@ All output formats share a common envelope structure:
     "started_at": "string",
     "completed_at": "string",
     "content_hash": "string",
-    "evidence_hash": "string"
+    "evidence_hash": "string",
+    "signature": {}
   },
   "summary": {},
   "policies": []
@@ -86,6 +88,7 @@ All output formats share a common envelope structure:
 | `completed_at` | string | Yes | ISO 8601 timestamp when scan completed |
 | `content_hash` | string | Yes | SHA-256 hash of result content |
 | `evidence_hash` | string | Yes | SHA-256 hash of all collected evidence |
+| `signature` | object | No | Cryptographic signature (see Section 3.5) |
 
 ### 3.3 Agent Information
 
@@ -122,6 +125,126 @@ All output formats share a common envelope structure:
 | `hostname` | string | Yes | Hostname |
 | `os` | string | Yes | Operating system: `linux`, `windows`, `macos` |
 | `arch` | string | Yes | Architecture: `x86_64`, `aarch64`, etc. |
+
+### 3.5 Signature Block
+
+The signature block provides cryptographic proof of result integrity and agent identity. When present, it contains a digital signature over the envelope's `content_hash` and `evidence_hash` fields.
+
+#### 3.5.1 Structure
+
+```json
+{
+  "signer_id": "tpm:sha256:a1b2c3d4e5f6...",
+  "signer_type": "agent",
+  "algorithm": "tpm-ecdsa-p256",
+  "public_key": "BASE64_ENCODED_PUBLIC_KEY",
+  "signature": "BASE64_ENCODED_SIGNATURE",
+  "key_id": "tpm:ephemeral:ESP_EPHEMERAL_a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "signed_at": "2026-01-10T15:30:00Z",
+  "covers": ["content_hash", "evidence_hash"],
+  "certificate_chain": null
+}
+```
+
+#### 3.5.2 Signature Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `signer_id` | string | Yes | Unique identifier for the signer (see 3.5.3) |
+| `signer_type` | string | Yes | Type of signer (currently always `"agent"`) |
+| `algorithm` | string | Yes | Signing algorithm identifier (see 3.5.4) |
+| `public_key` | string | Yes | Base64-encoded public key for verification |
+| `signature` | string | Yes | Base64-encoded signature value |
+| `key_id` | string | Yes | Key identifier for external lookup |
+| `signed_at` | string | Yes | ISO 8601 timestamp when signature was created |
+| `covers` | array | Yes | Fields covered by signature |
+| `certificate_chain` | array | No | X.509 certificate chain for PKI verification |
+
+#### 3.5.3 Signer Identification
+
+The `signer_id` format depends on the signing backend:
+
+| Backend | Format | Example |
+|---------|--------|---------|
+| TPM | `tpm:sha256:<fingerprint>` | `tpm:sha256:a1b2c3d4e5f6...` |
+| Software | `software:sha256:<fingerprint>` | `software:sha256:d4e5f6a7b8c9...` |
+
+The fingerprint is derived from the SHA-256 hash of the public key, providing a stable identifier across signing operations with the same key.
+
+#### 3.5.4 Algorithm Values
+
+| Value | Description | Key Type |
+|-------|-------------|----------|
+| `tpm-ecdsa-p256` | TPM-backed ECDSA with NIST P-256 curve | Hardware-protected |
+| `ecdsa-p256` | Software ECDSA with NIST P-256 curve | In-memory |
+
+#### 3.5.5 Signed Data
+
+The signature covers the concatenation of `content_hash` and `evidence_hash`:
+
+```
+signed_data = SHA256(content_hash || evidence_hash)
+```
+
+Where `||` denotes string concatenation. For example:
+
+```
+content_hash  = "sha256:8726504ca47412e0d8c0be36a1286a79..."
+evidence_hash = "sha256:9fbea98350c00a9642fe91431619dd3a..."
+signed_data   = SHA256("sha256:8726504ca47412e0d8c0be36a1286a79...sha256:9fbea98350c00a9642fe91431619dd3a...")
+```
+
+#### 3.5.6 Verification Levels
+
+The signature system supports multiple verification levels:
+
+| Level | Description | Trust Model |
+|-------|-------------|-------------|
+| **Level 0** | Self-contained verification | Public key included in signature; verifier trusts delivery channel |
+| **Level 1** | PKI verification | Certificate chain validated against trusted CA |
+| **Level 2** | TPM attestation | Hardware attestation proves key residency in TPM |
+
+**Current Implementation:** Level 0 with TPM key generation. Keys are generated in hardware (TPM) but verification relies on the included public key.
+
+#### 3.5.7 Verification Procedure
+
+To verify a signature (Level 0):
+
+1. Extract `signature.public_key` and decode from Base64
+2. Extract `signature.signature` and decode from Base64
+3. Reconstruct signed data: `SHA256(envelope.content_hash || envelope.evidence_hash)`
+4. Verify signature over signed data using public key and algorithm
+5. Optionally verify `signature.covers` contains expected fields
+
+```python
+# Pseudocode
+public_key = base64_decode(signature.public_key)
+sig_bytes = base64_decode(signature.signature)
+signed_data = sha256(envelope.content_hash + envelope.evidence_hash)
+is_valid = ecdsa_verify(public_key, signed_data, sig_bytes, algorithm="P-256")
+```
+
+#### 3.5.8 Certificate Chain
+
+When present, `certificate_chain` contains an ordered array of X.509 certificates:
+
+| Index | Certificate |
+|-------|-------------|
+| `[0]` | Leaf certificate (signing certificate) |
+| `[1]` | Intermediate CA |
+| `[n]` | Root CA (optional, may be in trust store) |
+
+Certificates may be PEM-encoded or Base64-encoded DER.
+
+#### 3.5.9 Unsigned Results
+
+Results may be unsigned in the following cases:
+
+- Summary format (no envelope with full hashes)
+- Signing backend unavailable (TPM not present, no fallback)
+- Signing operation failed (logged as warning)
+
+When unsigned, the `signature` field is `null` or absent.
 
 ---
 
@@ -610,7 +733,17 @@ The assessor package extends the full result with reproducibility information:
 {
   "envelope": {
     "result_id": "esp-result-...",
-    "evidence_hash": "9fbea98350c00a9642fe91431619dd3a..."
+    "evidence_hash": "sha256:9fbea98350c00a9642fe91431619dd3a...",
+    "signature": {
+      "signer_id": "tpm:sha256:a1b2c3d4...",
+      "signer_type": "agent",
+      "algorithm": "tpm-ecdsa-p256",
+      "public_key": "BASE64...",
+      "signature": "BASE64...",
+      "key_id": "tpm:ephemeral:ESP_EPHEMERAL_...",
+      "signed_at": "2026-01-10T15:30:00Z",
+      "covers": ["content_hash", "evidence_hash"]
+    }
   },
   "summary": {},
   "checks": [
@@ -651,8 +784,19 @@ See Section 3-10 for complete structure. Full example:
     },
     "started_at": "2026-01-23T22:11:22Z",
     "completed_at": "2026-01-23T22:11:22Z",
-    "content_hash": "8726504ca47412e0d8c0be36a1286a79...",
-    "evidence_hash": "9fbea98350c00a9642fe91431619dd3a..."
+    "content_hash": "sha256:8726504ca47412e0d8c0be36a1286a79...",
+    "evidence_hash": "sha256:9fbea98350c00a9642fe91431619dd3a...",
+    "signature": {
+      "signer_id": "tpm:sha256:a1b2c3d4e5f6...",
+      "signer_type": "agent",
+      "algorithm": "tpm-ecdsa-p256",
+      "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...",
+      "signature": "MEUCIQC...",
+      "key_id": "tpm:ephemeral:ESP_EPHEMERAL_a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "signed_at": "2026-01-23T22:11:22Z",
+      "covers": ["content_hash", "evidence_hash"],
+      "certificate_chain": null
+    }
   },
   "summary": {
     "total_policies": 3,
@@ -775,7 +919,17 @@ if !schema_version.starts_with("1.") {
 | Posture score | `posture_score == passed_weight / total_weight` |
 | Evidence hash | Matches hash of all evidence data |
 
-### 14.3 Validation Errors
+### 14.3 Signature Validation
+
+| Rule | Validation |
+|------|------------|
+| Covers field | Must contain `["content_hash", "evidence_hash"]` |
+| Algorithm | Must be known algorithm value |
+| Public key | Must be valid Base64 |
+| Signature | Must be valid Base64 |
+| Signed data | `SHA256(content_hash \|\| evidence_hash)` must verify |
+
+### 14.4 Validation Errors
 
 | Error | Condition |
 |-------|-----------|
@@ -784,6 +938,8 @@ if !schema_version.starts_with("1.") {
 | `InvalidCriticality` | Unknown criticality value |
 | `InconsistentCounts` | Summary counts don't add up |
 | `InvalidTimestamp` | Timestamp not ISO 8601 |
+| `InvalidSignature` | Signature verification failed |
+| `UnsupportedAlgorithm` | Unknown signing algorithm |
 
 ---
 
@@ -816,9 +972,13 @@ if !schema_version.starts_with("1.") {
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2026-01-08 | Initial v1.0.0 specification |
-|       |              Updated to match actual implementation output |
+|       |            | Updated to match actual implementation output |
 |       |            | Added single envelope design (all policies in one result) |
 |       |            | Updated field names (`control_id` vs `control`) |
 |       |            | Added assessor package schema (Section 11) |
 |       |            | Added output format examples (Section 12) |
 |       |            | Removed ExecutionManifest (internal IR, not output) |
+| 1.0.1 | 2026-01-10 | Added Signature Block schema (Section 3.5) |
+|       |            | Added signature to output format table (Section 2.3) |
+|       |            | Added signature validation rules (Section 14.3) |
+|       |            | Updated examples with signature blocks (Section 12) |
