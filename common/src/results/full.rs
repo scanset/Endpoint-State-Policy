@@ -3,6 +3,15 @@
 //! Full results contain actual system values and findings.
 //! This is sensitive data - for local storage only.
 //!
+//! ## Hash Architecture
+//!
+//! The `evidence_hash` and `content_hash` are computed ONCE during execution
+//! in `ExecutionEngine::execute()` and passed to the builder. The builder
+//! does NOT compute hashes - it only accepts pre-computed values.
+//!
+//! This ensures hash consistency across all output formats (attestation,
+//! full-results, assessor-evidence).
+//!
 //! ## Feature
 //!
 //! This module requires the `full-results` feature.
@@ -197,10 +206,24 @@ impl PolicyResult {
 // ============================================================================
 
 /// Builder for constructing full results
+///
+/// ## Hash Handling
+///
+/// This builder requires pre-computed hashes from the execution engine.
+/// It does NOT compute hashes itself - this ensures consistency across
+/// all output formats.
+///
+/// ```rust,ignore
+/// let builder = FullResultBuilder::new(agent, host)
+///     .with_content_hash(manifest.content_hash.clone())
+///     .with_evidence_hash(manifest.evidence_hash.clone());
+/// ```
 pub struct FullResultBuilder {
     agent: AgentInfo,
     host: HostInfo,
     policies: Vec<PolicyResult>,
+    content_hash: Option<String>,
+    evidence_hash: Option<String>,
 }
 
 impl FullResultBuilder {
@@ -210,6 +233,8 @@ impl FullResultBuilder {
             agent,
             host,
             policies: Vec::new(),
+            content_hash: None,
+            evidence_hash: None,
         }
     }
 
@@ -236,8 +261,46 @@ impl FullResultBuilder {
         self.policies.push(policy);
     }
 
+    /// Set the content hash (pre-computed from ExecutionManifest)
+    ///
+    /// This hash is computed ONCE in the execution engine and must be
+    /// passed through unchanged to ensure consistency.
+    pub fn with_content_hash(mut self, hash: impl Into<String>) -> Self {
+        self.content_hash = Some(hash.into());
+        self
+    }
+
+    /// Set the evidence hash (pre-computed from ExecutionManifest)
+    ///
+    /// This hash is computed ONCE in the execution engine and must be
+    /// passed through unchanged to ensure consistency.
+    pub fn with_evidence_hash(mut self, hash: impl Into<String>) -> Self {
+        self.evidence_hash = Some(hash.into());
+        self
+    }
+
     /// Build the full result
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if `content_hash` or `evidence_hash` were not provided.
+    /// These are required to ensure hash consistency across output formats.
     pub fn build(self) -> Result<FullResult, ResultError> {
+        // Require pre-computed hashes
+        let content_hash = self.content_hash.ok_or_else(|| {
+            ResultError::BuildError(
+                "content_hash is required - must be pre-computed from ExecutionManifest"
+                    .to_string(),
+            )
+        })?;
+
+        let evidence_hash = self.evidence_hash.ok_or_else(|| {
+            ResultError::BuildError(
+                "evidence_hash is required - must be pre-computed from ExecutionManifest"
+                    .to_string(),
+            )
+        })?;
+
         // Build summary from policies
         let mut summary = ScanSummary::new();
         for policy in &self.policies {
@@ -248,49 +311,13 @@ impl FullResultBuilder {
             }
         }
 
-        // Compute evidence hash from all policy evidence
-        let evidence_hash = compute_evidence_hash(&self.policies)?;
-
-        // Build envelope
-        let mut envelope = ResultEnvelope::new(self.agent, self.host);
-        envelope = envelope.with_evidence_hash(evidence_hash);
-
-        // Compute content hash
-        let content_hash = compute_content_hash(&summary, &self.policies)?;
-        envelope = envelope.with_content_hash(content_hash);
+        // Build envelope with pre-computed hashes
+        let envelope = ResultEnvelope::new(self.agent, self.host)
+            .with_content_hash(content_hash)
+            .with_evidence_hash(evidence_hash);
 
         Ok(FullResult::new(envelope, summary, self.policies))
     }
-}
-
-/// Compute evidence hash from all policies
-fn compute_evidence_hash(policies: &[PolicyResult]) -> Result<String, ResultError> {
-    use super::crypto::hash_content;
-
-    // Collect all evidence data
-    let evidence_data: Vec<_> = policies
-        .iter()
-        .map(|p| (&p.identity.policy_id, &p.evidence.data))
-        .collect();
-
-    hash_content(&evidence_data).map_err(|e| ResultError::HashingError(e.to_string()))
-}
-
-/// Compute content hash for full result
-fn compute_content_hash(
-    summary: &ScanSummary,
-    policies: &[PolicyResult],
-) -> Result<String, ResultError> {
-    use super::crypto::hash_content;
-
-    #[derive(serde::Serialize)]
-    struct Content<'a> {
-        summary: &'a ScanSummary,
-        policies: &'a [PolicyResult],
-    }
-
-    let content = Content { summary, policies };
-    hash_content(&content).map_err(|e| ResultError::HashingError(e.to_string()))
 }
 
 #[allow(
@@ -336,11 +363,13 @@ mod tests {
     }
 
     #[test]
-    fn test_full_result_builder() {
+    fn test_full_result_builder_with_hashes() {
         let agent = AgentInfo::new("agent-1", "test", "1.0.0", "cli");
         let host = HostInfo::new("host-1", "testhost", "linux", "x86_64");
 
-        let mut builder = FullResultBuilder::new(agent, host);
+        let mut builder = FullResultBuilder::new(agent, host)
+            .with_content_hash("sha256:content123")
+            .with_evidence_hash("sha256:evidence456");
 
         builder.add_policy_result(
             "policy-1",
@@ -376,6 +405,31 @@ mod tests {
         assert_eq!(result.summary.passed, 1);
         assert_eq!(result.summary.failed, 1);
         assert_eq!(result.all_findings().len(), 1);
+        // Verify hashes are preserved
+        assert_eq!(result.envelope.content_hash, "sha256:content123");
+        assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
+    }
+
+    #[test]
+    fn test_full_result_builder_requires_hashes() {
+        let agent = AgentInfo::default();
+        let host = HostInfo::default();
+
+        let mut builder = FullResultBuilder::new(agent, host);
+        builder.add_policy_result(
+            "test",
+            "linux",
+            Criticality::Medium,
+            vec![],
+            Outcome::Pass,
+            0.5,
+            vec![],
+            Evidence::new(),
+        );
+
+        // Should fail without hashes
+        let result = builder.build();
+        assert!(result.is_err());
     }
 
     #[test]
@@ -383,7 +437,10 @@ mod tests {
         let agent = AgentInfo::default();
         let host = HostInfo::default();
 
-        let mut builder = FullResultBuilder::new(agent, host);
+        let mut builder = FullResultBuilder::new(agent, host)
+            .with_content_hash("sha256:test")
+            .with_evidence_hash("sha256:test");
+
         builder.add_policy_result(
             "test",
             "linux",

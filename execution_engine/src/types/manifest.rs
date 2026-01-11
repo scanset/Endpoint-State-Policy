@@ -7,30 +7,33 @@
 //!
 //! ```text
 //! ExecutionEngine::execute()
-//!     └── ExecutionManifest (raw, complete, no feature gates)
+//!     └── ExecutionManifest (raw, complete, with canonical hashes)
 //!             ├── Policy identity (id, platform, criticality, mappings)
 //!             ├── Tree result (logical structure with pass/fail)
 //!             ├── Collected data (with CollectionMethod)
-//!             └── Findings (validation failures)
+//!             ├── Findings (validation failures)
+//!             ├── ContentManifest → content_hash (computed ONCE)
+//!             └── EvidenceManifest → evidence_hash (computed ONCE)
 //!
-//!             ↓ ResultBuilder selects output format ↓
+//!             ↓ Output builders USE these hashes, never recompute ↓
 //!
 //! ResultBuilder::from_manifest(manifest)
-//!     ├── .build_attestation()      → CUI-free, evidence hashed
-//!     ├── .build_full_results()     → With Evidence, no command/inputs
-//!     └── .build_assessor_results() → With Evidence + command/inputs
+//!     ├── .build_attestation()      → uses manifest.content_hash, manifest.evidence_hash
+//!     ├── .build_full_results()     → uses manifest.content_hash, manifest.evidence_hash
+//!     └── .build_assessor_results() → uses manifest.content_hash, manifest.evidence_hash
 //! ```
 //!
-//! ## Data Flow
+//! ## Hash Consistency
 //!
-//! The manifest preserves all execution data without filtering:
+//! The `content_hash` and `evidence_hash` are computed ONCE during execution
+//! and included in all output formats. This ensures:
 //!
-//! - `CollectedData` contains field values AND `CollectionMetadata`
-//! - `CollectionMetadata` contains `method: Option<CollectionMethod>`
-//! - `CollectionMethod` always has all fields populated by collectors
-//! - Output builders decide what to serialize based on output mode
+//! - Attestations can be verified against full results
+//! - Assessor packages can be linked to attestations
+//! - SIEM/SOAR can trust attestation hashes
 
 use crate::strategies::{CollectedData, CtnExecutionResult};
+use crate::types::canonical_manifest::{ContentManifest, EvidenceManifest};
 use crate::types::common::LogicalOp;
 use crate::types::criterion::CtnNodeId;
 use common::results::{ComplianceFinding, ControlMapping, CriteriaCounts, Criticality, Outcome};
@@ -44,20 +47,23 @@ use std::collections::HashMap;
 ///
 /// The manifest is the single source of truth from policy execution.
 /// It contains everything needed to build attestations, full results,
-/// or assessor-ready results. No feature gates - all data is captured.
+/// or assessor-ready results.
 ///
-/// ## Usage
+/// ## Canonical Hashes
+///
+/// The `content_hash` and `evidence_hash` fields are computed ONCE during
+/// execution and must be used by all output builders. This ensures hash
+/// consistency across all output formats.
 ///
 /// ```rust,ignore
-/// // Engine returns raw manifest
-/// let manifest = engine.execute()?;
-///
-/// // Agent decides output based on config
-/// let output = match config.output_mode {
-///     OutputMode::Attestation => ResultBuilder::attestation(&manifest),
-///     OutputMode::FullResults => ResultBuilder::full_results(&manifest),
-///     OutputMode::AssessorEvidence => ResultBuilder::assessor_results(&manifest),
-/// };
+/// // In output builders - USE the hashes, don't recompute!
+/// fn build_attestation(manifest: &ExecutionManifest) -> Attestation {
+///     Attestation {
+///         content_hash: manifest.content_hash.clone(),   // USE
+///         evidence_hash: manifest.evidence_hash.clone(), // USE
+///         // ...
+///     }
+/// }
 /// ```
 #[derive(Debug, Clone)]
 pub struct ExecutionManifest {
@@ -115,6 +121,33 @@ pub struct ExecutionManifest {
     pub findings: Vec<ComplianceFinding>,
 
     // ========================================================================
+    // Canonical Manifests & Hashes
+    // ========================================================================
+    /// Canonical content manifest (what was evaluated)
+    ///
+    /// This is the deterministic representation of the policy evaluation context.
+    /// Used to compute `content_hash`.
+    pub content_manifest: ContentManifest,
+
+    /// Canonical evidence manifest (what was observed)
+    ///
+    /// This is the deterministic representation of collected evidence.
+    /// Used to compute `evidence_hash`.
+    pub evidence_manifest: EvidenceManifest,
+
+    /// SHA-256 hash of the content manifest
+    ///
+    /// Computed ONCE during execution. All output formats MUST use this
+    /// value directly - never recompute.
+    pub content_hash: String,
+
+    /// SHA-256 hash of the evidence manifest
+    ///
+    /// Computed ONCE during execution. All output formats MUST use this
+    /// value directly - never recompute.
+    pub evidence_hash: String,
+
+    // ========================================================================
     // Execution Metadata
     // ========================================================================
     /// When execution started (ISO 8601)
@@ -126,14 +159,20 @@ pub struct ExecutionManifest {
 
 impl ExecutionManifest {
     /// Create a new execution manifest
+    ///
+    /// Note: This creates a manifest with empty hashes. Call `finalize_hashes()`
+    /// after populating the manifests, or let `ExecutionEngine::execute()` handle it.
     pub fn new(
         policy_id: impl Into<String>,
         platform: impl Into<String>,
         criticality: Criticality,
     ) -> Self {
+        let policy_id_str = policy_id.into();
+        let platform_str = platform.into();
+
         Self {
-            policy_id: policy_id.into(),
-            platform: platform.into(),
+            policy_id: policy_id_str.clone(),
+            platform: platform_str.clone(),
             criticality,
             control_mappings: Vec::new(),
             tree_result: TreeResult::empty(),
@@ -141,6 +180,10 @@ impl ExecutionManifest {
             tree_passed: false,
             collected_data: HashMap::new(),
             findings: Vec::new(),
+            content_manifest: ContentManifest::new(&policy_id_str, &platform_str),
+            evidence_manifest: EvidenceManifest::new(),
+            content_hash: String::new(),
+            evidence_hash: String::new(),
             executed_at: current_timestamp(),
             execution_duration_ms: 0,
         }
@@ -179,6 +222,34 @@ impl ExecutionManifest {
     /// Get all CTN results flattened from tree
     pub fn all_ctn_results(&self) -> Vec<&CtnResult> {
         self.tree_result.collect_ctn_results()
+    }
+
+    /// Check if canonical hashes have been computed
+    ///
+    /// Returns false if hashes are empty (manifest not finalized)
+    pub fn has_valid_hashes(&self) -> bool {
+        !self.content_hash.is_empty() && !self.evidence_hash.is_empty()
+    }
+
+    /// Compute and set the canonical hashes from the manifests
+    ///
+    /// This should be called exactly ONCE after all data is collected.
+    /// Typically called by `ExecutionEngine::execute()` before returning.
+    pub fn finalize_hashes(&mut self) {
+        self.content_hash = self.content_manifest.compute_hash();
+        self.evidence_hash = self.evidence_manifest.compute_hash();
+    }
+
+    /// Set the content manifest and update hash
+    pub fn set_content_manifest(&mut self, manifest: ContentManifest) {
+        self.content_manifest = manifest;
+        self.content_hash = self.content_manifest.compute_hash();
+    }
+
+    /// Set the evidence manifest and update hash
+    pub fn set_evidence_manifest(&mut self, manifest: EvidenceManifest) {
+        self.evidence_manifest = manifest;
+        self.evidence_hash = self.evidence_manifest.compute_hash();
     }
 }
 
@@ -557,6 +628,20 @@ mod tests {
         assert_eq!(manifest.criticality, Criticality::High);
         assert!(!manifest.is_pass());
         assert_eq!(manifest.collected_object_count(), 0);
+        assert!(!manifest.has_valid_hashes()); // Hashes not computed yet
+    }
+
+    #[test]
+    fn test_execution_manifest_finalize_hashes() {
+        let mut manifest = ExecutionManifest::new("test-policy", "linux", Criticality::High);
+
+        assert!(!manifest.has_valid_hashes());
+
+        manifest.finalize_hashes();
+
+        assert!(manifest.has_valid_hashes());
+        assert!(manifest.content_hash.starts_with("sha256:"));
+        assert!(manifest.evidence_hash.starts_with("sha256:"));
     }
 
     #[test]

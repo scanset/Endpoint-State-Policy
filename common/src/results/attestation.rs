@@ -3,6 +3,15 @@
 //! Attestations contain only metadata about compliance checks - no actual
 //! system values. Safe for SaaS and network transport.
 //!
+//! ## Hash Architecture
+//!
+//! The `evidence_hash` and `content_hash` are computed ONCE during execution
+//! in `ExecutionEngine::execute()` and passed to the builder. The builder
+//! does NOT compute hashes - it only accepts pre-computed values.
+//!
+//! This ensures hash consistency across all output formats (attestation,
+//! full-results, assessor-evidence).
+//!
 //! ## Feature
 //!
 //! This module requires the `attestation` feature (enabled by default).
@@ -140,10 +149,23 @@ impl CheckAttestation {
 // ============================================================================
 
 /// Builder for constructing attestation results
+///
+/// ## Hash Handling
+///
+/// This builder requires pre-computed hashes from the execution engine.
+/// It does NOT compute hashes itself - this ensures consistency across
+/// all output formats.
+///
+/// ```rust,ignore
+/// let builder = AttestationBuilder::new(agent, host)
+///     .with_content_hash(manifest.content_hash.clone())
+///     .with_evidence_hash(manifest.evidence_hash.clone());
+/// ```
 pub struct AttestationBuilder {
     agent: AgentInfo,
     host: HostInfo,
     checks: Vec<CheckAttestation>,
+    content_hash: Option<String>,
     evidence_hash: Option<String>,
 }
 
@@ -154,6 +176,7 @@ impl AttestationBuilder {
             agent,
             host,
             checks: Vec::new(),
+            content_hash: None,
             evidence_hash: None,
         }
     }
@@ -178,14 +201,46 @@ impl AttestationBuilder {
         self.checks.push(check);
     }
 
-    /// Set evidence hash
+    /// Set the content hash (pre-computed from ExecutionManifest)
+    ///
+    /// This hash is computed ONCE in the execution engine and must be
+    /// passed through unchanged to ensure consistency.
+    pub fn with_content_hash(mut self, hash: impl Into<String>) -> Self {
+        self.content_hash = Some(hash.into());
+        self
+    }
+
+    /// Set the evidence hash (pre-computed from ExecutionManifest)
+    ///
+    /// This hash is computed ONCE in the execution engine and must be
+    /// passed through unchanged to ensure consistency.
     pub fn with_evidence_hash(mut self, hash: impl Into<String>) -> Self {
         self.evidence_hash = Some(hash.into());
         self
     }
 
     /// Build the attestation result
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if `content_hash` or `evidence_hash` were not provided.
+    /// These are required to ensure hash consistency across output formats.
     pub fn build(self) -> Result<AttestationResult, ResultError> {
+        // Require pre-computed hashes
+        let content_hash = self.content_hash.ok_or_else(|| {
+            ResultError::BuildError(
+                "content_hash is required - must be pre-computed from ExecutionManifest"
+                    .to_string(),
+            )
+        })?;
+
+        let evidence_hash = self.evidence_hash.ok_or_else(|| {
+            ResultError::BuildError(
+                "evidence_hash is required - must be pre-computed from ExecutionManifest"
+                    .to_string(),
+            )
+        })?;
+
         // Build summary from checks
         let mut summary = ScanSummary::new();
         for check in &self.checks {
@@ -196,37 +251,13 @@ impl AttestationBuilder {
             }
         }
 
-        // Build envelope
-        let mut envelope = ResultEnvelope::new(self.agent, self.host);
-
-        // Set evidence hash if provided
-        if let Some(hash) = self.evidence_hash {
-            envelope = envelope.with_evidence_hash(hash);
-        }
-
-        // Compute content hash
-        let content_hash = compute_content_hash(&summary, &self.checks)?;
-        envelope = envelope.with_content_hash(content_hash);
+        // Build envelope with pre-computed hashes
+        let envelope = ResultEnvelope::new(self.agent, self.host)
+            .with_content_hash(content_hash)
+            .with_evidence_hash(evidence_hash);
 
         Ok(AttestationResult::new(envelope, summary, self.checks))
     }
-}
-
-/// Compute content hash for attestation
-fn compute_content_hash(
-    summary: &ScanSummary,
-    checks: &[CheckAttestation],
-) -> Result<String, ResultError> {
-    use super::crypto::hash_content;
-
-    #[derive(serde::Serialize)]
-    struct Content<'a> {
-        summary: &'a ScanSummary,
-        checks: &'a [CheckAttestation],
-    }
-
-    let content = Content { summary, checks };
-    hash_content(&content).map_err(|e| ResultError::HashingError(e.to_string()))
 }
 
 #[allow(
@@ -256,11 +287,13 @@ mod tests {
     }
 
     #[test]
-    fn test_attestation_builder() {
+    fn test_attestation_builder_with_hashes() {
         let agent = AgentInfo::new("agent-1", "test", "1.0.0", "cli");
         let host = HostInfo::new("host-1", "testhost", "linux", "x86_64");
 
-        let mut builder = AttestationBuilder::new(agent, host);
+        let mut builder = AttestationBuilder::new(agent, host)
+            .with_content_hash("sha256:content123")
+            .with_evidence_hash("sha256:evidence456");
 
         builder.add_policy_check(
             "policy-1",
@@ -286,6 +319,29 @@ mod tests {
         assert_eq!(result.summary.total_policies, 2);
         assert_eq!(result.summary.passed, 1);
         assert_eq!(result.summary.failed, 1);
+        // Verify hashes are preserved
+        assert_eq!(result.envelope.content_hash, "sha256:content123");
+        assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
+    }
+
+    #[test]
+    fn test_attestation_builder_requires_hashes() {
+        let agent = AgentInfo::default();
+        let host = HostInfo::default();
+
+        let mut builder = AttestationBuilder::new(agent, host);
+        builder.add_policy_check(
+            "test",
+            "linux",
+            Criticality::Medium,
+            vec![],
+            Outcome::Pass,
+            0.5,
+        );
+
+        // Should fail without hashes
+        let result = builder.build();
+        assert!(result.is_err());
     }
 
     #[test]
@@ -293,7 +349,10 @@ mod tests {
         let agent = AgentInfo::default();
         let host = HostInfo::default();
 
-        let mut builder = AttestationBuilder::new(agent, host);
+        let mut builder = AttestationBuilder::new(agent, host)
+            .with_content_hash("sha256:test")
+            .with_evidence_hash("sha256:test");
+
         builder.add_policy_check(
             "test",
             "linux",

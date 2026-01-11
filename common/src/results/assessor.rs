@@ -8,22 +8,21 @@
 //! - Detailed findings with remediation guidance
 //! - Reproducibility information
 //!
+//! ## Hash Architecture
+//!
+//! The `evidence_hash` and `content_hash` are computed ONCE during execution
+//! in `ExecutionEngine::execute()` and passed to the builder. The builder
+//! does NOT compute hashes - it only accepts pre-computed values.
+//!
+//! This ensures hash consistency across all output formats (attestation,
+//! full-results, assessor-evidence).
+//!
 //! ## Feature Flag
 //!
 //! This module requires the `assessor-evidence` feature, which implies `full-results`.
 //! When enabled, `CollectionMethod` serialization includes:
 //! - `command` - The exact command executed
 //! - `inputs` - Input parameters used
-//!
-//! ## Usage
-//!
-//! ```rust,ignore
-//! use common::results::{AssessorPackage, AssessorPackageBuilder, PolicyInput};
-//!
-//! let builder = AssessorPackageBuilder::new(agent, host);
-//! builder.add_policy(policy_input);
-//! let package = builder.build()?;
-//! ```
 
 use serde::{Deserialize, Serialize};
 
@@ -291,10 +290,24 @@ pub struct CollectionCommand {
 // ============================================================================
 
 /// Builder for constructing AssessorPackage instances
+///
+/// ## Hash Handling
+///
+/// This builder requires pre-computed hashes from the execution engine.
+/// It does NOT compute hashes itself - this ensures consistency across
+/// all output formats.
+///
+/// ```rust,ignore
+/// let builder = AssessorPackageBuilder::new(agent, host)
+///     .with_content_hash(manifest.content_hash.clone())
+///     .with_evidence_hash(manifest.evidence_hash.clone());
+/// ```
 pub struct AssessorPackageBuilder {
     agent: AgentInfo,
     host: HostInfo,
     policies: Vec<AssessorPolicyResult>,
+    content_hash: Option<String>,
+    evidence_hash: Option<String>,
     notes: Option<String>,
 }
 
@@ -305,6 +318,8 @@ impl AssessorPackageBuilder {
             agent,
             host,
             policies: Vec::new(),
+            content_hash: None,
+            evidence_hash: None,
             notes: None,
         }
     }
@@ -314,6 +329,24 @@ impl AssessorPackageBuilder {
         self.policies.push(policy);
     }
 
+    /// Set the content hash (pre-computed from ExecutionManifest)
+    ///
+    /// This hash is computed ONCE in the execution engine and must be
+    /// passed through unchanged to ensure consistency.
+    pub fn with_content_hash(mut self, hash: impl Into<String>) -> Self {
+        self.content_hash = Some(hash.into());
+        self
+    }
+
+    /// Set the evidence hash (pre-computed from ExecutionManifest)
+    ///
+    /// This hash is computed ONCE in the execution engine and must be
+    /// passed through unchanged to ensure consistency.
+    pub fn with_evidence_hash(mut self, hash: impl Into<String>) -> Self {
+        self.evidence_hash = Some(hash.into());
+        self
+    }
+
     /// Add notes for the package
     pub fn with_notes(mut self, notes: impl Into<String>) -> Self {
         self.notes = Some(notes.into());
@@ -321,12 +354,33 @@ impl AssessorPackageBuilder {
     }
 
     /// Build the assessor package
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if:
+    /// - No policies were added
+    /// - `content_hash` or `evidence_hash` were not provided
     pub fn build(self) -> Result<AssessorPackage, ResultError> {
         if self.policies.is_empty() {
             return Err(ResultError::BuildError(
                 "At least one policy result is required".to_string(),
             ));
         }
+
+        // Require pre-computed hashes
+        let content_hash = self.content_hash.ok_or_else(|| {
+            ResultError::BuildError(
+                "content_hash is required - must be pre-computed from ExecutionManifest"
+                    .to_string(),
+            )
+        })?;
+
+        let evidence_hash = self.evidence_hash.ok_or_else(|| {
+            ResultError::BuildError(
+                "evidence_hash is required - must be pre-computed from ExecutionManifest"
+                    .to_string(),
+            )
+        })?;
 
         // Build summary
         let mut summary = ExecutionSummary::new();
@@ -335,18 +389,10 @@ impl AssessorPackageBuilder {
             summary.record(passed, policy.identity.criticality, policy.weight);
         }
 
-        // Compute evidence hash from all evidence
-        let mut combined_evidence = Evidence::new();
-        for policy in &self.policies {
-            combined_evidence.merge(policy.evidence.clone());
-        }
-        let evidence_hash = combined_evidence
-            .compute_hash()
-            .unwrap_or_else(|_| "error-computing-hash".to_string());
-
-        // Build envelope
-        let envelope =
-            ResultEnvelope::new(self.agent, self.host).with_evidence_hash(&evidence_hash);
+        // Build envelope with pre-computed hashes
+        let envelope = ResultEnvelope::new(self.agent, self.host)
+            .with_content_hash(content_hash)
+            .with_evidence_hash(evidence_hash);
 
         // Build package info
         let mut package_info = PackageInfo::default();
@@ -431,10 +477,12 @@ mod tests {
     }
 
     #[test]
-    fn test_assessor_package_builder() {
+    fn test_assessor_package_builder_with_hashes() {
         let agent = AgentInfo::with_defaults("test-agent");
         let host = HostInfo::from_system();
-        let mut builder = AssessorPackageBuilder::new(agent, host);
+        let mut builder = AssessorPackageBuilder::new(agent, host)
+            .with_content_hash("sha256:content123")
+            .with_evidence_hash("sha256:evidence456");
 
         let identity = PolicyIdentity::new(
             "test-policy",
@@ -451,6 +499,32 @@ mod tests {
 
         assert_eq!(package.policy_count(), 1);
         assert!(package.all_passed());
+        // Verify hashes are preserved
+        assert_eq!(package.envelope.content_hash, "sha256:content123");
+        assert_eq!(package.envelope.evidence_hash, "sha256:evidence456");
+    }
+
+    #[test]
+    fn test_assessor_package_builder_requires_hashes() {
+        let agent = AgentInfo::with_defaults("test-agent");
+        let host = HostInfo::from_system();
+        let mut builder = AssessorPackageBuilder::new(agent, host);
+
+        let identity = PolicyIdentity::new(
+            "test-policy",
+            "linux",
+            Criticality::High,
+            vec![ControlMapping::new("CIS", "1.1.1")],
+        );
+
+        let evidence = create_test_evidence();
+        let policy = AssessorPolicyResult::new(identity, Outcome::Pass, 0.8, vec![], evidence);
+
+        builder.add_policy(policy);
+
+        // Should fail without hashes
+        let result = builder.build();
+        assert!(result.is_err());
     }
 
     #[test]

@@ -29,7 +29,8 @@ pub mod record_traits;
 pub mod field_path_extensions;
 pub use field_path_extensions::*;
 
-// Execution manifest types (new)
+// Execution manifest types
+pub mod canonical_manifest;
 pub mod manifest;
 
 // ============================================================================
@@ -94,7 +95,10 @@ pub use resolution_context::*; // ResolutionContext
 // Record traits
 pub use record_traits::*;
 
-// Manifest types (new)
+// Manifest types
+pub use canonical_manifest::{
+    combine_hashes, ContentManifest, CriterionEvidence, EvidenceManifest, ObjectEvidence,
+};
 pub use manifest::{CtnResult, ExecutionManifest, TreeResult, TreeStats};
 
 // ============================================================================

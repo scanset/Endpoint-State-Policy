@@ -9,18 +9,28 @@
 //!
 //! ```text
 //! ExecutionEngine::execute()
-//!   └── ExecutionManifest (raw, complete)
+//!   └── ExecutionManifest (raw, complete, with canonical hashes)
 //!         ├── Policy identity (id, platform, criticality, mappings)
 //!         ├── Tree result (logical structure with pass/fail)
 //!         ├── Collected data (with CollectionMethod)
-//!         └── Findings (validation failures)
+//!         ├── Findings (validation failures)
+//!         ├── ContentManifest → content_hash (computed ONCE)
+//!         └── EvidenceManifest → evidence_hash (computed ONCE)
 //!
 //!         ↓ ResultBuilder (in common/results) transforms to ↓
 //!
-//!         ├── Attestation (CUI-free, hashed)
-//!         ├── FullResults (with Evidence)
-//!         └── AssessorResults (with Evidence + command/inputs)
+//!         ├── Attestation (CUI-free, uses manifest.evidence_hash)
+//!         ├── FullResults (with Evidence, uses manifest.evidence_hash)
+//!         └── AssessorResults (with Evidence + command/inputs, uses manifest.evidence_hash)
 //! ```
+//!
+//! ## Hash Consistency
+//!
+//! The `content_hash` and `evidence_hash` are computed ONCE in `execute()` before
+//! returning. All output formats MUST use these hashes directly to ensure:
+//! - Attestations can be verified against full results
+//! - Assessor packages can be linked to attestations
+//! - SIEM/SOAR can trust attestation hashes
 
 use crate::execution::behavior::extract_behavior_hints;
 use crate::execution::comparisons::{string, ComparisonExt};
@@ -28,13 +38,18 @@ use crate::execution::deferred_ops;
 use crate::execution::filter_evaluation::FilterEvaluator;
 use crate::strategies::CtnExecutionError;
 use crate::strategies::{CollectedData, CtnContract, CtnExecutionResult, CtnStrategyRegistry};
+use crate::types::canonical_manifest::{
+    ContentManifest, CriterionEvidence, EvidenceManifest, ObjectEvidence,
+};
 use crate::types::common::{LogicalOp, ResolvedValue};
 use crate::types::execution_context::{
     ExecutableCriteriaTree, ExecutableCriterion, ExecutableObject, ExecutionContext,
 };
 use crate::types::manifest::{CtnResult, ExecutionManifest, TreeResult};
 use common::ast::nodes::FilterAction;
+use common::metadata::MetaDataBlock;
 use common::results::common::PolicyOutcome;
+use common::results::crypto::sha256_hash;
 use common::results::{
     ComplianceFinding, ControlMapping, CriteriaCounts, Criticality, FindingSeverity, Outcome,
 };
@@ -64,6 +79,11 @@ impl ExecutionEngine {
     ///
     /// Executes the criteria tree for a single policy and produces an `ExecutionManifest`.
     /// The manifest contains all raw data needed to build any output format.
+    ///
+    /// ## Canonical Hashes
+    ///
+    /// This method computes `content_hash` and `evidence_hash` ONCE before returning.
+    /// All output builders MUST use these hashes directly - never recompute!
     pub fn execute(&mut self) -> Result<ExecutionManifest, ExecutionError> {
         let start_time = Instant::now();
 
@@ -151,7 +171,24 @@ impl ExecutionEngine {
 
         let execution_duration = start_time.elapsed();
 
-        // Build the execution manifest
+        // ====================================================================
+        // BUILD CANONICAL MANIFESTS AND COMPUTE HASHES (ONCE!)
+        // ====================================================================
+        let content_manifest =
+            self.build_content_manifest(metadata, &control_mappings, &tree_result);
+        let evidence_manifest = self.build_evidence_manifest(&tree_result);
+
+        // Compute hashes ONCE - all output formats MUST use these directly
+        let content_hash = content_manifest.compute_hash();
+        let evidence_hash = evidence_manifest.compute_hash();
+
+        log_debug!(
+            "Computed canonical hashes",
+            "content_hash" => &content_hash,
+            "evidence_hash" => &evidence_hash
+        );
+
+        // Build the execution manifest with canonical hashes
         Ok(ExecutionManifest {
             policy_id,
             platform,
@@ -162,10 +199,120 @@ impl ExecutionEngine {
             tree_passed: stats.failed == 0 && stats.errors == 0,
             collected_data,
             findings,
+            content_manifest,
+            evidence_manifest,
+            content_hash,
+            evidence_hash,
             executed_at: current_timestamp(),
             execution_duration_ms: execution_duration.as_millis() as u64,
         })
     }
+
+    // ========================================================================
+    // Canonical Manifest Building
+    // ========================================================================
+
+    /// Build the canonical content manifest (WHAT was evaluated)
+    ///
+    /// This captures the policy identity and evaluation context in a
+    /// deterministic format suitable for hashing.
+    fn build_content_manifest(
+        &self,
+        metadata: &MetaDataBlock,
+        control_mappings: &[ControlMapping],
+        tree_result: &TreeResult,
+    ) -> ContentManifest {
+        let policy_id = metadata.policy_id().unwrap_or("unknown").to_string();
+        let platform = metadata.platform().unwrap_or("unknown").to_string();
+        let criticality = metadata.criticality().unwrap_or("medium").to_string();
+        let version = metadata.get("version").map(String::from);
+
+        // Convert control mappings to sorted strings for determinism
+        let mut mapping_strings: Vec<String> = control_mappings
+            .iter()
+            .map(|m| format!("{}:{}", m.framework, m.control_id))
+            .collect();
+        mapping_strings.sort();
+
+        // Compute criteria structure hash
+        let criteria_hash = self.compute_criteria_structure_hash(tree_result);
+
+        let mut manifest = ContentManifest::new(&policy_id, &platform)
+            .with_criticality(&criticality)
+            .with_control_mappings(mapping_strings)
+            .with_criteria_hash(criteria_hash);
+
+        if let Some(v) = version {
+            manifest = manifest.with_version(v);
+        }
+
+        manifest
+    }
+
+    /// Build the canonical evidence manifest (WHAT was observed)
+    ///
+    /// This captures the collected evidence in a deterministic format
+    /// suitable for hashing.
+    fn build_evidence_manifest(&self, tree_result: &TreeResult) -> EvidenceManifest {
+        let mut manifest = EvidenceManifest::new();
+
+        // Process all CTN results from the tree
+        for ctn_result in tree_result.collect_ctn_results() {
+            let mut criterion_evidence = CriterionEvidence::new(
+                &ctn_result.criterion_type,
+                format!("{:?}", ctn_result.status),
+            );
+
+            // Process collected data for this CTN
+            for (object_id, data) in &ctn_result.execution_result.collected_data {
+                let method_type = data
+                    .metadata
+                    .method
+                    .as_ref()
+                    .map(|m| m.method_type.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                let mut object_evidence = ObjectEvidence::new(&method_type);
+
+                // Convert fields to JSON values (BTreeMap ensures deterministic order)
+                for (field_name, field_value) in &data.fields {
+                    let json_value = resolved_value_to_json(field_value);
+                    object_evidence.add_field(field_name, json_value);
+                }
+
+                // Mark as failed if collection had errors
+                if !data.metadata.warnings.is_empty() {
+                    // Still succeeded but with warnings - keep as success
+                }
+
+                criterion_evidence.add_object(object_id, object_evidence);
+            }
+
+            // Use CTN node ID as criterion identifier
+            manifest.add_criterion(ctn_result.ctn_node_id.to_string(), criterion_evidence);
+        }
+
+        manifest
+    }
+
+    /// Compute a deterministic hash of the criteria tree structure
+    ///
+    /// This captures the logical structure (AND/OR/NOT, CTN types) without runtime values.
+    fn compute_criteria_structure_hash(&self, tree_result: &TreeResult) -> String {
+        let structure = tree_to_structure_string(tree_result);
+
+        match sha256_hash(structure.as_bytes()) {
+            Ok(digest) => {
+                let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+                format!("sha256:{}", hex)
+            }
+            Err(_) => "sha256:error-computing-structure-hash".to_string(),
+        }
+    }
+
+    // ========================================================================
+    // Data Collection
+    // ========================================================================
 
     /// Collect all CollectedData from tree into a single HashMap
     ///
@@ -198,6 +345,10 @@ impl ExecutionEngine {
             self.collect_data_recursive(child, all_data);
         }
     }
+
+    // ========================================================================
+    // Tree Execution
+    // ========================================================================
 
     /// Recursive tree traversal with logical operator application
     fn execute_tree(
@@ -383,6 +534,10 @@ impl ExecutionEngine {
         Ok(result)
     }
 
+    // ========================================================================
+    // Findings Generation
+    // ========================================================================
+
     /// Convert CTN execution result to compliance finding
     fn ctn_result_to_finding(
         &self,
@@ -500,6 +655,10 @@ impl ExecutionEngine {
                 reason: e.to_string(),
             })
     }
+
+    // ========================================================================
+    // Filter Evaluation
+    // ========================================================================
 
     /// Apply object filters to collected data
     fn apply_object_filters(
@@ -874,16 +1033,10 @@ impl ExecutionEngine {
 /// **DEPRECATED**: Use `ExecutionManifest` directly. This type is provided
 /// for backwards compatibility with existing code.
 ///
-/// To migrate:
-/// ```rust,ignore
-/// // Old:
-/// let result: PolicyExecutionResult = engine.execute()?;
-/// if result.tree_passed { ... }
+/// ## Canonical Hashes
 ///
-/// // New:
-/// let manifest: ExecutionManifest = engine.execute()?;
-/// if manifest.tree_passed { ... }
-/// ```
+/// The `content_hash` and `evidence_hash` fields are carried through from
+/// the `ExecutionManifest`. All output builders MUST use these directly.
 #[derive(Debug, Clone)]
 pub struct PolicyExecutionResult {
     /// Policy outcome
@@ -896,6 +1049,10 @@ pub struct PolicyExecutionResult {
     pub evidence: Option<common::results::Evidence>,
     /// Whether the tree passed
     pub tree_passed: bool,
+    /// SHA-256 hash of canonical content manifest
+    pub content_hash: String,
+    /// SHA-256 hash of canonical evidence manifest
+    pub evidence_hash: String,
 }
 
 impl From<ExecutionManifest> for PolicyExecutionResult {
@@ -947,6 +1104,9 @@ impl From<ExecutionManifest> for PolicyExecutionResult {
             findings: manifest.findings,
             evidence,
             tree_passed: manifest.tree_passed,
+            // CRITICAL: Carry through the canonical hashes!
+            content_hash: manifest.content_hash,
+            evidence_hash: manifest.evidence_hash,
         }
     }
 }
@@ -965,6 +1125,11 @@ impl PolicyExecutionResult {
     /// Get policy ID
     pub fn policy_id(&self) -> &str {
         &self.outcome.policy_id
+    }
+
+    /// Check if canonical hashes are present
+    pub fn has_valid_hashes(&self) -> bool {
+        !self.content_hash.is_empty() && !self.evidence_hash.is_empty()
     }
 }
 
@@ -1025,6 +1190,69 @@ fn logical_op_to_string(op: LogicalOp) -> &'static str {
     match op {
         LogicalOp::And => "AND",
         LogicalOp::Or => "OR",
+    }
+}
+
+/// Convert tree to a deterministic string representation for hashing
+fn tree_to_structure_string(tree: &TreeResult) -> String {
+    let mut parts = Vec::new();
+
+    // Add logical operator info
+    if let Some(op) = tree.logical_op {
+        let op_str = match op {
+            LogicalOp::And => "AND",
+            LogicalOp::Or => "OR",
+        };
+        if tree.negated {
+            parts.push(format!("NOT({})", op_str));
+        } else {
+            parts.push(op_str.to_string());
+        }
+    }
+
+    // Add CTN types (sorted for determinism)
+    let mut ctn_types: Vec<String> = tree
+        .ctn_results
+        .iter()
+        .map(|r| r.criterion_type.clone())
+        .collect();
+    ctn_types.sort();
+    for ctn_type in ctn_types {
+        parts.push(format!("CTN:{}", ctn_type));
+    }
+
+    // Recurse into children (sorted for determinism)
+    let mut child_strings: Vec<String> = tree
+        .child_results
+        .iter()
+        .map(tree_to_structure_string)
+        .collect();
+    child_strings.sort();
+    parts.extend(child_strings);
+
+    parts.join("|")
+}
+
+/// Convert ResolvedValue to serde_json::Value
+fn resolved_value_to_json(value: &ResolvedValue) -> serde_json::Value {
+    match value {
+        ResolvedValue::String(s) => serde_json::Value::String(s.clone()),
+        ResolvedValue::Integer(i) => serde_json::Value::Number((*i).into()),
+        ResolvedValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        ResolvedValue::Boolean(b) => serde_json::Value::Bool(*b),
+        ResolvedValue::Collection(items) => {
+            serde_json::Value::Array(items.iter().map(resolved_value_to_json).collect())
+        }
+        ResolvedValue::Version(v) => serde_json::Value::String(v.to_string()),
+        ResolvedValue::Binary(bytes) => {
+            // Encode binary as hex for JSON compatibility
+            let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+            serde_json::Value::String(format!("hex:{}", hex))
+        }
+        ResolvedValue::EvrString(evr) => serde_json::Value::String(evr.to_string()),
+        ResolvedValue::RecordData(record) => record.as_json_value().clone(),
     }
 }
 
