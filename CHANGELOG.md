@@ -1,5 +1,66 @@
 # Changelog with Security Notes
 
+## [1.1.0] - 2026-01-24
+
+### Added
+- **TransparencyProof Types** (common): New types for certificate transparency log integration:
+  - `TransparencyProof` - Container with `log_index` and Merkle inclusion proof
+  - `InclusionProof` - Merkle tree proof with `tree_size`, `root_hash`, and sibling `hashes`
+  - Supports Level 2 verification (PKI + transparency proof validation)
+- **IdentityStatus Type** (common): New type for tracking PKI bootstrap status:
+  - `IdentityStatus::success(signer_id)` - Successful PKI identity establishment
+  - `IdentityStatus::failed(signer_id, error, error_code)` - Bootstrap failure with diagnostics
+  - `IdentityStatus::disabled(signer_id)` - Identity explicitly disabled in configuration
+  - Standard error codes: `BOOTSTRAP_DISABLED`, `BOOTSTRAP_CONNECTION_FAILED`, `BOOTSTRAP_AUTH_FAILED`, `BOOTSTRAP_CERT_FAILED`, `BOOTSTRAP_TIMEOUT`, `BOOTSTRAP_TLS_ERROR`
+  - Helper function `generate_unsigned_signer_id()` for fallback signer IDs
+- **SignatureBlock.transparency** (common): Optional `TransparencyProof` field for certificate transparency integration.
+- **SignatureBlock::with_pki()** (common): New constructor for creating signature blocks with full PKI identity (certificate chain + transparency proof).
+- **SignatureBlock Helper Methods** (common): `has_pki()`, `has_transparency()`, `has_level2_support()` for verification level detection.
+- **ResultEnvelope::with_identity()** (common): New constructor accepting explicit `IdentityStatus`.
+- **ResultEnvelope::is_identity_bootstrapped()** (common): Helper method to check PKI status.
+- **SCHEMA_VERSION Constant** (common): Exported constant `"1.1.0"` for schema version.
+
+### Changed
+- **Schema Version** (common): Updated from `1.0.0` to `1.1.0`.
+- **ResultEnvelope** (common): Added required `identity_status: IdentityStatus` field. All result envelopes now track PKI bootstrap status.
+- **AttestationBuilder** (common): Now requires `with_identity_status()` before `build()`. Returns error if not provided.
+- **FullResultBuilder** (common): Now requires `with_identity_status()` before `build()`. Returns error if not provided.
+- **AssessorPackageBuilder** (common): Now requires `with_identity_status()` before `build()`. Returns error if not provided.
+- **ResultBuilder Methods** (common): All build methods now require `identity_status` parameter:
+  - `build_attestation(checks, content_hash, evidence_hash, identity_status)`
+  - `build_full_result(policies, content_hash, evidence_hash, identity_status)`
+  - `build_assessor_package(policies, content_hash, evidence_hash, identity_status)`
+  - `build_both(policies, content_hash, evidence_hash, identity_status)`
+  - `build_all(policies, content_hash, evidence_hash, identity_status)`
+- **PackageInfo.format_version** (common): Updated default from `"1.0.0"` to `"1.1.0"`.
+- **ESP Canonical Schema Documentation** (docs): Updated `09_ESP_Canonical_Schema_v1_1_0.md` with:
+  - Section 3.5.9: Transparency proof specification
+  - Section 3.6: Identity status specification
+  - Updated SignatureBlock schema with `transparency` field
+  - Updated ResultEnvelope schema with `identity_status` field
+  - Certificate chain verification procedures
+  - Transparency proof verification algorithm
+
+### Migration Guide
+- All code that builds results must now provide `IdentityStatus`:
+```rust
+  // Before (1.0.0)
+  let result = builder.build_attestation(checks, content_hash, evidence_hash)?;
+
+  // After (1.1.0)
+  let identity_status = IdentityStatus::success("scanset://prod/aws/...");
+  // Or for unsigned results:
+  let identity_status = IdentityStatus::disabled("unsigned:agent:hostname");
+
+  let result = builder.build_attestation(checks, content_hash, evidence_hash, identity_status)?;
+```
+- `ResultEnvelope::new()` still works but uses `IdentityStatus::default()`. Prefer `ResultEnvelope::with_identity()` for explicit status.
+
+### Notes
+- This release adds support for PKI identity tracking and certificate transparency, preparing for Trust System integration.
+- Results without PKI identity remain valid but will have `identity_status.bootstrapped = false`.
+- The `signature` field remains optional; unsigned results have `signature: null` with appropriate `identity_status`.
+
 ## [1.0.0] - 2026-01-09
 
 ### Added

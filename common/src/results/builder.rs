@@ -9,17 +9,23 @@
 //! from the ExecutionManifest. Hashes are computed ONCE during execution
 //! and passed through to ensure consistency across all output formats.
 //!
+//! ## Identity Status
+//!
+//! As of schema v1.1.0, all build methods require an `identity_status` parameter
+//! that indicates whether PKI identity was established during bootstrap.
+//!
 //! ```text
 //! ExecutionManifest
 //!     ├── content_hash  ──┬──► AttestationResult
-//!     └── evidence_hash ──┼──► FullResult
-//!                         └──► AssessorPackage
+//!     ├── evidence_hash ──┼──► FullResult
+//!     └── identity_status ┴──► AssessorPackage
 //! ```
 
 use super::common::{ControlMapping, Criticality, Outcome};
 use super::envelope::{AgentInfo, HostInfo};
 use super::error::ResultError;
 use super::identity::PolicyIdentity;
+use super::identity_status::IdentityStatus;
 
 #[cfg(feature = "attestation")]
 use super::attestation::{AttestationBuilder, AttestationResult, CheckAttestation};
@@ -37,18 +43,20 @@ use super::assessor::{AssessorPackage, AssessorPackageBuilder, AssessorPolicyRes
 /// Unified result builder
 ///
 /// Provides methods to build results based on enabled features.
-/// All methods require pre-computed hashes from the execution engine.
+/// All methods require pre-computed hashes and identity status.
 ///
 /// ## Example
 ///
 /// ```rust,ignore
 /// let builder = ResultBuilder::from_system("esp-agent");
+/// let identity_status = IdentityStatus::success("scanset://prod/aws/...");
 ///
-/// // All build methods require pre-computed hashes
+/// // All build methods require pre-computed hashes and identity status
 /// let attestation = builder.build_attestation(
 ///     checks,
 ///     manifest.content_hash.clone(),
 ///     manifest.evidence_hash.clone(),
+///     identity_status,
 /// )?;
 /// ```
 pub struct ResultBuilder {
@@ -77,6 +85,7 @@ impl ResultBuilder {
     /// * `checks` - The policy check results
     /// * `content_hash` - Pre-computed content hash from ExecutionManifest
     /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
+    /// * `identity_status` - PKI bootstrap status
     ///
     /// ## Example
     ///
@@ -85,6 +94,7 @@ impl ResultBuilder {
     ///     checks,
     ///     scan_result.content_hash.clone(),
     ///     scan_result.evidence_hash.clone(),
+    ///     identity_status,
     /// )?;
     /// ```
     #[cfg(feature = "attestation")]
@@ -93,10 +103,12 @@ impl ResultBuilder {
         checks: Vec<CheckInput>,
         content_hash: String,
         evidence_hash: String,
+        identity_status: IdentityStatus,
     ) -> Result<AttestationResult, ResultError> {
         let mut builder = AttestationBuilder::new(self.agent, self.host)
             .with_content_hash(content_hash)
-            .with_evidence_hash(evidence_hash);
+            .with_evidence_hash(evidence_hash)
+            .with_identity_status(identity_status);
 
         for check in checks {
             let identity = PolicyIdentity::new(
@@ -119,6 +131,7 @@ impl ResultBuilder {
     /// * `policies` - The policy results with evidence
     /// * `content_hash` - Pre-computed content hash from ExecutionManifest
     /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
+    /// * `identity_status` - PKI bootstrap status
     ///
     /// ## Example
     ///
@@ -127,6 +140,7 @@ impl ResultBuilder {
     ///     policies,
     ///     scan_result.content_hash.clone(),
     ///     scan_result.evidence_hash.clone(),
+    ///     identity_status,
     /// )?;
     /// ```
     #[cfg(feature = "full-results")]
@@ -135,10 +149,12 @@ impl ResultBuilder {
         policies: Vec<PolicyInput>,
         content_hash: String,
         evidence_hash: String,
+        identity_status: IdentityStatus,
     ) -> Result<FullResult, ResultError> {
         let mut builder = FullResultBuilder::new(self.agent, self.host)
             .with_content_hash(content_hash)
-            .with_evidence_hash(evidence_hash);
+            .with_evidence_hash(evidence_hash)
+            .with_identity_status(identity_status);
 
         for policy in policies {
             let identity = PolicyIdentity::new(
@@ -167,6 +183,7 @@ impl ResultBuilder {
     /// * `policies` - The policy results with full evidence and collection details
     /// * `content_hash` - Pre-computed content hash from ExecutionManifest
     /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
+    /// * `identity_status` - PKI bootstrap status
     ///
     /// ## Example
     ///
@@ -175,6 +192,7 @@ impl ResultBuilder {
     ///     policies,
     ///     scan_result.content_hash.clone(),
     ///     scan_result.evidence_hash.clone(),
+    ///     identity_status,
     /// )?;
     /// ```
     #[cfg(feature = "assessor-evidence")]
@@ -183,10 +201,12 @@ impl ResultBuilder {
         policies: Vec<AssessorInput>,
         content_hash: String,
         evidence_hash: String,
+        identity_status: IdentityStatus,
     ) -> Result<AssessorPackage, ResultError> {
         let mut builder = AssessorPackageBuilder::new(self.agent, self.host)
             .with_content_hash(content_hash)
-            .with_evidence_hash(evidence_hash);
+            .with_evidence_hash(evidence_hash)
+            .with_identity_status(identity_status);
 
         for policy in policies {
             let identity = PolicyIdentity::new(
@@ -211,19 +231,21 @@ impl ResultBuilder {
     /// Build both attestation and full result with consistent hashes
     ///
     /// Returns a tuple of (attestation, full_result) where both have
-    /// the same content_hash and evidence_hash.
+    /// the same content_hash, evidence_hash, and identity_status.
     ///
     /// ## Arguments
     ///
     /// * `policies` - The policy results with evidence
     /// * `content_hash` - Pre-computed content hash from ExecutionManifest
     /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
+    /// * `identity_status` - PKI bootstrap status
     #[cfg(all(feature = "attestation", feature = "full-results"))]
     pub fn build_both(
         self,
         policies: Vec<PolicyInput>,
         content_hash: String,
         evidence_hash: String,
+        identity_status: IdentityStatus,
     ) -> Result<(AttestationResult, FullResult), ResultError> {
         // Build checks for attestation from policies
         let checks: Vec<CheckInput> = policies
@@ -240,11 +262,12 @@ impl ResultBuilder {
             })
             .collect();
 
-        // Build attestation with pre-computed hashes
+        // Build attestation with pre-computed hashes and identity status
         let attestation = {
             let mut builder = AttestationBuilder::new(self.agent.clone(), self.host.clone())
                 .with_content_hash(content_hash.clone())
-                .with_evidence_hash(evidence_hash.clone());
+                .with_evidence_hash(evidence_hash.clone())
+                .with_identity_status(identity_status.clone());
 
             for check in checks {
                 let identity = PolicyIdentity::new(
@@ -259,11 +282,12 @@ impl ResultBuilder {
             builder.build()?
         };
 
-        // Build full result with same pre-computed hashes
+        // Build full result with same pre-computed hashes and identity status
         let full_result = {
             let mut builder = FullResultBuilder::new(self.agent, self.host)
                 .with_content_hash(content_hash)
-                .with_evidence_hash(evidence_hash);
+                .with_evidence_hash(evidence_hash)
+                .with_identity_status(identity_status);
 
             for policy in policies {
                 let identity = PolicyIdentity::new(
@@ -290,13 +314,14 @@ impl ResultBuilder {
     /// Build all three output formats with consistent hashes
     ///
     /// Returns a tuple of (attestation, full_result, assessor_package) where all
-    /// have the same content_hash and evidence_hash.
+    /// have the same content_hash, evidence_hash, and identity_status.
     ///
     /// ## Arguments
     ///
     /// * `policies` - The policy results with full evidence
     /// * `content_hash` - Pre-computed content hash from ExecutionManifest
     /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
+    /// * `identity_status` - PKI bootstrap status
     #[cfg(all(
         feature = "attestation",
         feature = "full-results",
@@ -307,6 +332,7 @@ impl ResultBuilder {
         policies: Vec<PolicyInput>,
         content_hash: String,
         evidence_hash: String,
+        identity_status: IdentityStatus,
     ) -> Result<(AttestationResult, FullResult, AssessorPackage), ResultError> {
         // Build checks for attestation
         let checks: Vec<CheckInput> = policies
@@ -344,7 +370,8 @@ impl ResultBuilder {
         let attestation = {
             let mut builder = AttestationBuilder::new(self.agent.clone(), self.host.clone())
                 .with_content_hash(content_hash.clone())
-                .with_evidence_hash(evidence_hash.clone());
+                .with_evidence_hash(evidence_hash.clone())
+                .with_identity_status(identity_status.clone());
 
             for check in checks {
                 let identity = PolicyIdentity::new(
@@ -363,7 +390,8 @@ impl ResultBuilder {
         let full_result = {
             let mut builder = FullResultBuilder::new(self.agent.clone(), self.host.clone())
                 .with_content_hash(content_hash.clone())
-                .with_evidence_hash(evidence_hash.clone());
+                .with_evidence_hash(evidence_hash.clone())
+                .with_identity_status(identity_status.clone());
 
             for policy in policies {
                 let identity = PolicyIdentity::new(
@@ -388,7 +416,8 @@ impl ResultBuilder {
         let assessor_package = {
             let mut builder = AssessorPackageBuilder::new(self.agent, self.host)
                 .with_content_hash(content_hash)
-                .with_evidence_hash(evidence_hash);
+                .with_evidence_hash(evidence_hash)
+                .with_identity_status(identity_status);
 
             for policy in assessor_inputs {
                 let identity = PolicyIdentity::new(
@@ -584,6 +613,7 @@ mod tests {
     #[test]
     fn test_build_attestation() {
         let builder = ResultBuilder::from_system("test-agent");
+        let identity_status = IdentityStatus::success("scanset://test");
 
         let checks = vec![
             CheckInput::new(
@@ -607,6 +637,7 @@ mod tests {
                 checks,
                 "sha256:content123".to_string(),
                 "sha256:evidence456".to_string(),
+                identity_status,
             )
             .unwrap();
 
@@ -615,12 +646,45 @@ mod tests {
         assert_eq!(result.summary.failed, 1);
         assert_eq!(result.envelope.content_hash, "sha256:content123");
         assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
+        assert!(result.is_identity_bootstrapped());
+    }
+
+    #[cfg(feature = "attestation")]
+    #[test]
+    fn test_build_attestation_with_failed_identity() {
+        let builder = ResultBuilder::from_system("test-agent");
+        let identity_status = IdentityStatus::failed(
+            "unsigned:agent:test",
+            "Connection refused",
+            "BOOTSTRAP_CONNECTION_FAILED",
+        );
+
+        let checks = vec![CheckInput::new(
+            "policy-1",
+            "linux",
+            Criticality::High,
+            vec![],
+            Outcome::Pass,
+        )];
+
+        let result = builder
+            .build_attestation(
+                checks,
+                "sha256:content".to_string(),
+                "sha256:evidence".to_string(),
+                identity_status,
+            )
+            .unwrap();
+
+        assert!(!result.is_identity_bootstrapped());
+        assert!(result.envelope.identity_status.has_error());
     }
 
     #[cfg(feature = "full-results")]
     #[test]
     fn test_build_full_result() {
         let builder = ResultBuilder::from_system("test-agent");
+        let identity_status = IdentityStatus::success("scanset://test");
 
         let policies = vec![PolicyInput::new(
             "policy-1",
@@ -635,6 +699,7 @@ mod tests {
                 policies,
                 "sha256:content123".to_string(),
                 "sha256:evidence456".to_string(),
+                identity_status,
             )
             .unwrap();
 
@@ -642,12 +707,14 @@ mod tests {
         assert_eq!(result.summary.passed, 1);
         assert_eq!(result.envelope.content_hash, "sha256:content123");
         assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
+        assert!(result.is_identity_bootstrapped());
     }
 
     #[cfg(feature = "assessor-evidence")]
     #[test]
     fn test_build_assessor_package() {
         let builder = ResultBuilder::from_system("test-agent");
+        let identity_status = IdentityStatus::disabled("unsigned:agent:test");
 
         let policies = vec![AssessorInput::new(
             "policy-1",
@@ -662,6 +729,7 @@ mod tests {
                 policies,
                 "sha256:content123".to_string(),
                 "sha256:evidence456".to_string(),
+                identity_status,
             )
             .unwrap();
 
@@ -669,12 +737,15 @@ mod tests {
         assert!(result.all_passed());
         assert_eq!(result.envelope.content_hash, "sha256:content123");
         assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
+        assert!(!result.is_identity_bootstrapped());
+        assert!(result.envelope.identity_status.is_disabled());
     }
 
     #[cfg(all(feature = "attestation", feature = "full-results"))]
     #[test]
-    fn test_build_both_has_same_hashes() {
+    fn test_build_both_has_same_hashes_and_identity() {
         let builder = ResultBuilder::from_system("test-agent");
+        let identity_status = IdentityStatus::success("scanset://test");
 
         let policies = vec![PolicyInput::new(
             "policy-1",
@@ -689,6 +760,7 @@ mod tests {
                 policies,
                 "sha256:content123".to_string(),
                 "sha256:evidence456".to_string(),
+                identity_status,
             )
             .unwrap();
 
@@ -701,6 +773,15 @@ mod tests {
             attestation.envelope.evidence_hash,
             full_result.envelope.evidence_hash
         );
+        // CRITICAL: Both must have same identity status
+        assert_eq!(
+            attestation.envelope.identity_status.signer_id,
+            full_result.envelope.identity_status.signer_id
+        );
+        assert_eq!(
+            attestation.envelope.identity_status.bootstrapped,
+            full_result.envelope.identity_status.bootstrapped
+        );
     }
 
     #[cfg(all(
@@ -709,8 +790,9 @@ mod tests {
         feature = "assessor-evidence"
     ))]
     #[test]
-    fn test_build_all_has_same_hashes() {
+    fn test_build_all_has_same_hashes_and_identity() {
         let builder = ResultBuilder::from_system("test-agent");
+        let identity_status = IdentityStatus::success("scanset://test");
 
         let policies = vec![PolicyInput::new(
             "policy-1",
@@ -725,6 +807,7 @@ mod tests {
                 policies,
                 "sha256:content123".to_string(),
                 "sha256:evidence456".to_string(),
+                identity_status,
             )
             .unwrap();
 
@@ -744,6 +827,15 @@ mod tests {
         assert_eq!(
             full_result.envelope.evidence_hash,
             assessor_package.envelope.evidence_hash
+        );
+        // CRITICAL: All three must have same identity status
+        assert_eq!(
+            attestation.envelope.identity_status.signer_id,
+            full_result.envelope.identity_status.signer_id
+        );
+        assert_eq!(
+            full_result.envelope.identity_status.signer_id,
+            assessor_package.envelope.identity_status.signer_id
         );
     }
 }

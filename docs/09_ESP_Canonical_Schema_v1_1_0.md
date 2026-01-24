@@ -1,8 +1,8 @@
-# ESP v1.0.0 — Canonical Execution Schema
+# ESP v1.1.0 — Canonical Execution Schema
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Status:** Normative
-**Last Updated:** 2026-01-10
+**Last Updated:** 2026-01-24
 
 ---
 
@@ -28,7 +28,7 @@ ScanResult (per policy)
     ├── Summary (minimal, CI/CD)
     ├── Attestation (CUI-free, network-safe)
     ├── Full Results (with Evidence)
-    └── Assessor Package (with reproducibility)
+    └── Assessor Package (with reproducibility) [DEFAULT]
 ```
 
 ### 2.2 Design Principles
@@ -40,6 +40,7 @@ ScanResult (per policy)
 | **Verifiable** | Evidence hash enables attestation/full result correlation |
 | **Serializable** | JSON format for interoperability |
 | **Signable** | Cryptographic signatures bind results to agent identity |
+| **Transparent** | Certificate issuance logged to append-only transparency log |
 
 ### 2.3 Output Format Selection
 
@@ -49,6 +50,8 @@ ScanResult (per policy)
 | `attestation` | Hash only | No | Type only | No | No | Yes |
 | `full` | Full | Yes | Full | No | No | Yes |
 | `assessor` | Full | Yes | Full | Yes | Yes | Yes |
+
+**Note:** `assessor` is the default output format as of v1.1.0.
 
 ---
 
@@ -69,7 +72,8 @@ All output formats share a common envelope structure:
     "completed_at": "string",
     "content_hash": "string",
     "evidence_hash": "string",
-    "signature": {}
+    "signature": {},
+    "identity_status": {}
   },
   "summary": {},
   "policies": []
@@ -89,6 +93,7 @@ All output formats share a common envelope structure:
 | `content_hash` | string | Yes | SHA-256 hash of result content |
 | `evidence_hash` | string | Yes | SHA-256 hash of all collected evidence |
 | `signature` | object | No | Cryptographic signature (see Section 3.5) |
+| `identity_status` | object | Yes | Identity bootstrap status (see Section 3.6) |
 
 ### 3.3 Agent Information
 
@@ -96,7 +101,7 @@ All output formats share a common envelope structure:
 {
   "id": "esp-agent",
   "name": "esp-agent",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "agent_type": "cli"
 }
 ```
@@ -128,21 +133,33 @@ All output formats share a common envelope structure:
 
 ### 3.5 Signature Block
 
-The signature block provides cryptographic proof of result integrity and agent identity. When present, it contains a digital signature over the envelope's `content_hash` and `evidence_hash` fields.
+The signature block provides cryptographic proof of result integrity and agent identity. When present, it contains a digital signature over the envelope's `content_hash` and `evidence_hash` fields, along with the certificate chain and transparency proof for PKI verification.
 
 #### 3.5.1 Structure
 
 ```json
 {
-  "signer_id": "tpm:sha256:a1b2c3d4e5f6...",
+  "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
   "signer_type": "agent",
-  "algorithm": "tpm-ecdsa-p256",
+  "algorithm": "ecdsa-p256",
   "public_key": "BASE64_ENCODED_PUBLIC_KEY",
   "signature": "BASE64_ENCODED_SIGNATURE",
-  "key_id": "tpm:ephemeral:ESP_EPHEMERAL_a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "key_id": "pki:cert:1234567890abcdef",
   "signed_at": "2026-01-10T15:30:00Z",
   "covers": ["content_hash", "evidence_hash"],
-  "certificate_chain": null
+  "certificate_chain": [
+    "-----BEGIN CERTIFICATE-----\n<workload-cert>\n-----END CERTIFICATE-----",
+    "-----BEGIN CERTIFICATE-----\n<workload-ca>\n-----END CERTIFICATE-----",
+    "-----BEGIN CERTIFICATE-----\n<ia-cert>\n-----END CERTIFICATE-----"
+  ],
+  "transparency": {
+    "log_index": 47,
+    "inclusion_proof": {
+      "tree_size": 100,
+      "root_hash": "abc123def456789...",
+      "hashes": ["hash1...", "hash2...", "hash3..."]
+    }
+  }
 }
 ```
 
@@ -155,30 +172,59 @@ The signature block provides cryptographic proof of result integrity and agent i
 | `algorithm` | string | Yes | Signing algorithm identifier (see 3.5.4) |
 | `public_key` | string | Yes | Base64-encoded public key for verification |
 | `signature` | string | Yes | Base64-encoded signature value |
-| `key_id` | string | Yes | Key identifier for external lookup |
+| `key_id` | string | Yes | Key identifier for external lookup (see 3.5.5) |
 | `signed_at` | string | Yes | ISO 8601 timestamp when signature was created |
 | `covers` | array | Yes | Fields covered by signature |
-| `certificate_chain` | array | No | X.509 certificate chain for PKI verification |
+| `certificate_chain` | array | Yes* | X.509 certificate chain for PKI verification (see 3.5.8) |
+| `transparency` | object | Yes* | Transparency log proof (see 3.5.9) |
+
+*Required when PKI identity is available. May be `null` in legacy or degraded modes.
 
 #### 3.5.3 Signer Identification
 
-The `signer_id` format depends on the signing backend:
+The `signer_id` format depends on the identity source:
 
-| Backend | Format | Example |
-|---------|--------|---------|
-| TPM | `tpm:sha256:<fingerprint>` | `tpm:sha256:a1b2c3d4e5f6...` |
-| Software | `software:sha256:<fingerprint>` | `software:sha256:d4e5f6a7b8c9...` |
+| Identity Source | Format | Example |
+|-----------------|--------|---------|
+| PKI (Workload Certificate) | SAN URI from certificate | `scanset://prod/aws/account/123456789012/workload/esp-agent` |
+| TPM (Legacy) | `tpm:sha256:<fingerprint>` | `tpm:sha256:a1b2c3d4e5f6...` |
+| Software (Legacy) | `software:sha256:<fingerprint>` | `software:sha256:d4e5f6a7b8c9...` |
 
-The fingerprint is derived from the SHA-256 hash of the public key, providing a stable identifier across signing operations with the same key.
+**PKI Signer ID Format:**
+
+When using PKI identity, the `signer_id` is extracted from the workload certificate's Subject Alternative Name (SAN) URI extension. The format is:
+
+```
+scanset://{environment}/{provider}/account/{account_id}/workload/{workload_id}
+```
+
+| Component | Description | Example |
+|-----------|-------------|---------|
+| `environment` | Deployment environment | `prod`, `staging`, `dev` |
+| `provider` | Cloud provider | `aws`, `gcp`, `azure` |
+| `account_id` | Cloud account identifier | `123456789012` |
+| `workload_id` | Workload identifier | `esp-agent` |
 
 #### 3.5.4 Algorithm Values
 
 | Value | Description | Key Type |
 |-------|-------------|----------|
-| `tpm-ecdsa-p256` | TPM-backed ECDSA with NIST P-256 curve | Hardware-protected |
-| `ecdsa-p256` | Software ECDSA with NIST P-256 curve | In-memory |
+| `ecdsa-p256` | ECDSA with NIST P-256 curve | PKI or software |
+| `tpm-ecdsa-p256` | TPM-backed ECDSA with NIST P-256 curve | Hardware-protected (legacy) |
 
-#### 3.5.5 Signed Data
+**Note:** As of v1.1.0, `ecdsa-p256` with PKI identity is the standard signing method.
+
+#### 3.5.5 Key Identification
+
+The `key_id` format depends on the identity source:
+
+| Identity Source | Format | Example |
+|-----------------|--------|---------|
+| PKI | `pki:cert:<certificate_serial>` | `pki:cert:1234567890abcdef` |
+| TPM (Legacy) | `tpm:ephemeral:<key_name>` | `tpm:ephemeral:ESP_EPHEMERAL_a1b2c3d4-...` |
+| Software (Legacy) | `software:ephemeral:<uuid>` | `software:ephemeral:550e8400-e29b-...` |
+
+#### 3.5.6 Signed Data
 
 The signature covers the concatenation of `content_hash` and `evidence_hash`:
 
@@ -194,57 +240,221 @@ evidence_hash = "sha256:9fbea98350c00a9642fe91431619dd3a..."
 signed_data   = SHA256("sha256:8726504ca47412e0d8c0be36a1286a79...sha256:9fbea98350c00a9642fe91431619dd3a...")
 ```
 
-#### 3.5.6 Verification Levels
+#### 3.5.7 Verification Levels
 
 The signature system supports multiple verification levels:
 
 | Level | Description | Trust Model |
 |-------|-------------|-------------|
 | **Level 0** | Self-contained verification | Public key included in signature; verifier trusts delivery channel |
-| **Level 1** | PKI verification | Certificate chain validated against trusted CA |
-| **Level 2** | TPM attestation | Hardware attestation proves key residency in TPM |
+| **Level 1** | PKI verification | Certificate chain validated against trusted Root CA |
+| **Level 2** | PKI + Transparency | Certificate chain validated AND transparency proof verified |
 
-**Current Implementation:** Level 0 with TPM key generation. Keys are generated in hardware (TPM) but verification relies on the included public key.
-
-#### 3.5.7 Verification Procedure
-
-To verify a signature (Level 0):
-
-1. Extract `signature.public_key` and decode from Base64
-2. Extract `signature.signature` and decode from Base64
-3. Reconstruct signed data: `SHA256(envelope.content_hash || envelope.evidence_hash)`
-4. Verify signature over signed data using public key and algorithm
-5. Optionally verify `signature.covers` contains expected fields
-
-```python
-# Pseudocode
-public_key = base64_decode(signature.public_key)
-sig_bytes = base64_decode(signature.signature)
-signed_data = sha256(envelope.content_hash + envelope.evidence_hash)
-is_valid = ecdsa_verify(public_key, signed_data, sig_bytes, algorithm="P-256")
-```
+**Current Implementation:** Level 2 is the standard for PKI-signed results. The certificate chain allows offline verification against a trusted Root CA, and the transparency proof provides tamper-evident audit trail.
 
 #### 3.5.8 Certificate Chain
 
-When present, `certificate_chain` contains an ordered array of X.509 certificates:
+When present, `certificate_chain` contains an ordered array of PEM-encoded X.509 certificates:
 
-| Index | Certificate |
-|-------|-------------|
-| `[0]` | Leaf certificate (signing certificate) |
-| `[1]` | Intermediate CA |
-| `[n]` | Root CA (optional, may be in trust store) |
+| Index | Certificate | Description |
+|-------|-------------|-------------|
+| `[0]` | Workload certificate | Signing certificate issued to the agent |
+| `[1]` | Workload CA certificate | Intermediate CA for workload certificates |
+| `[2]` | Trust System IA certificate | Intermediate Authority certificate |
 
-Certificates may be PEM-encoded or Base64-encoded DER.
+The chain allows verification up to a trusted Root CA without requiring network access.
 
-#### 3.5.9 Unsigned Results
+**Verification procedure:**
 
-Results may be unsigned in the following cases:
+1. Parse all certificates in the chain
+2. Verify each certificate's signature against its issuer
+3. Verify the chain terminates at a trusted Root CA
+4. Validate the leaf certificate (workload cert):
+   - `notBefore` ≤ current time ≤ `notAfter`
+   - Key Usage includes `digitalSignature`
+   - Basic Constraints: `CA:FALSE`
+5. Extract the SAN URI and compare with `signer_id`
+6. Extract the public key and compare with `public_key` field
+
+#### 3.5.9 Transparency Proof
+
+The `transparency` field provides cryptographic proof that the signing certificate was logged to the Trust System's append-only transparency log at issuance time.
+
+```json
+{
+  "log_index": 47,
+  "inclusion_proof": {
+    "tree_size": 100,
+    "root_hash": "abc123def456789...",
+    "hashes": ["hash1...", "hash2...", "hash3..."]
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `log_index` | integer | Index of the certificate entry in the transparency log |
+| `inclusion_proof` | object | Merkle tree inclusion proof |
+
+**Inclusion Proof Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tree_size` | integer | Size of the Merkle tree when proof was generated |
+| `root_hash` | string | Hex-encoded root hash of the Merkle tree |
+| `hashes` | array | Hex-encoded sibling hashes for proof verification |
+
+**Verification procedure:**
+
+1. Reconstruct the leaf hash: `leaf_hash = SHA256(0x00 || certificate_pem || signer_id)`
+2. Walk the proof path using the sibling hashes:
+   - For each hash, combine with current hash using: `SHA256(0x01 || left || right)`
+3. Compare the computed root with `inclusion_proof.root_hash`
+4. Optionally fetch a signed checkpoint from the transparency log to verify `root_hash` is authentic
+
+**Security properties:**
+
+- **Tamper evidence:** Any modification to the log changes the root hash
+- **Non-repudiation:** Certificate issuance is permanently recorded
+- **Auditability:** Third parties can verify certificate was logged
+
+#### 3.5.10 Verification Procedure (Complete)
+
+To fully verify a signed result with PKI identity:
+
+```
+1. PARSE signature block
+   - Decode public_key from Base64
+   - Decode signature from Base64
+   - Parse certificate_chain PEM certificates
+
+2. VERIFY certificate chain
+   - Chain: workload_cert → workload_ca → ia_cert → (trusted Root CA)
+   - Validate each signature in chain
+   - Check workload_cert validity period
+   - Check workload_cert key usage
+
+3. VERIFY signer identity
+   - Extract SAN URI from workload_cert
+   - Compare with signature.signer_id
+   - If mismatch: REJECT
+
+4. VERIFY public key match
+   - Extract public key from workload_cert
+   - Compare with signature.public_key (DER format)
+   - If mismatch: REJECT
+
+5. VERIFY cryptographic signature
+   - Reconstruct: signed_data = SHA256(envelope.content_hash || envelope.evidence_hash)
+   - ECDSA_Verify(signed_data, signature, public_key)
+   - If invalid: REJECT
+
+6. VERIFY transparency proof
+   - Compute leaf_hash from certificate + signer_id
+   - Walk inclusion_proof to compute root
+   - Compare with inclusion_proof.root_hash
+   - If mismatch: REJECT
+
+7. OPTIONAL: Verify checkpoint
+   - Fetch signed checkpoint from transparency log
+   - Verify checkpoint signature against Root CA
+   - Verify inclusion_proof.root_hash matches checkpoint
+   - This provides freshness guarantee
+
+8. ACCEPT if all checks pass
+```
+
+#### 3.5.11 Unsigned Results
+
+Results may be unsigned (`signature: null`) in the following cases:
 
 - Summary format (no envelope with full hashes)
-- Signing backend unavailable (TPM not present, no fallback)
-- Signing operation failed (logged as warning)
+- Identity bootstrap failed (see Section 3.6)
+- Agent configured to skip identity (`identity.enabled = false`)
 
-When unsigned, the `signature` field is `null` or absent.
+When unsigned, consumers should check `identity_status` for the reason.
+
+### 3.6 Identity Status
+
+The `identity_status` field indicates whether the agent successfully established PKI identity and provides diagnostic information if bootstrap failed.
+
+#### 3.6.1 Structure
+
+```json
+{
+  "bootstrapped": true,
+  "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
+  "error": null,
+  "error_code": null
+}
+```
+
+#### 3.6.2 Identity Status Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `bootstrapped` | boolean | Yes | Whether PKI identity was successfully established |
+| `signer_id` | string | Yes | Identity string (PKI URI or unsigned placeholder) |
+| `error` | string | No | Human-readable error message if bootstrap failed |
+| `error_code` | string | No | Machine-readable error code if bootstrap failed |
+
+#### 3.6.3 Signer ID When Unsigned
+
+When bootstrap fails, `signer_id` uses a placeholder format:
+
+```
+unsigned:agent:{hostname}-{hex_suffix}
+```
+
+Example: `unsigned:agent:server01-a1b2c3d4`
+
+This allows tracking which host produced unsigned results.
+
+#### 3.6.4 Error Codes
+
+| Code | Description |
+|------|-------------|
+| `BOOTSTRAP_DISABLED` | Identity bootstrap disabled in configuration |
+| `BOOTSTRAP_CONNECTION_FAILED` | Could not connect to orchestrator or identity provider |
+| `BOOTSTRAP_AUTH_FAILED` | Authentication failed (invalid AWS credentials, JWT rejected) |
+| `BOOTSTRAP_CERT_FAILED` | Certificate enrollment rejected by certificate issuer |
+| `BOOTSTRAP_TIMEOUT` | Bootstrap operation timed out |
+| `BOOTSTRAP_TLS_ERROR` | TLS handshake or certificate verification failed |
+
+#### 3.6.5 Examples
+
+**Successful bootstrap:**
+
+```json
+{
+  "bootstrapped": true,
+  "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
+  "error": null,
+  "error_code": null
+}
+```
+
+**Failed bootstrap (connection error):**
+
+```json
+{
+  "bootstrapped": false,
+  "signer_id": "unsigned:agent:server01-a1b2c3d4",
+  "error": "Failed to connect to orchestrator: connection refused",
+  "error_code": "BOOTSTRAP_CONNECTION_FAILED"
+}
+```
+
+**Bootstrap disabled:**
+
+```json
+{
+  "bootstrapped": false,
+  "signer_id": "unsigned:agent:server01-a1b2c3d4",
+  "error": "Identity bootstrap disabled in configuration",
+  "error_code": "BOOTSTRAP_DISABLED"
+}
+```
 
 ---
 
@@ -672,7 +882,7 @@ The assessor package extends the full result with reproducibility information:
 
 ```json
 {
-  "format_version": "1.0.0",
+  "format_version": "1.1.0",
   "generated_at": "2026-01-23T22:15:06Z",
   "purpose": "Compliance assessment verification",
   "contains_cui": true,
@@ -701,7 +911,7 @@ The assessor package extends the full result with reproducibility information:
   "agent": {
     "id": "esp-agent",
     "name": "esp-agent",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "summary": {
     "total_policies": 3,
@@ -732,48 +942,12 @@ The assessor package extends the full result with reproducibility information:
 ```json
 {
   "envelope": {
-    "result_id": "esp-result-...",
-    "evidence_hash": "sha256:9fbea98350c00a9642fe91431619dd3a...",
-    "signature": {
-      "signer_id": "tpm:sha256:a1b2c3d4...",
-      "signer_type": "agent",
-      "algorithm": "tpm-ecdsa-p256",
-      "public_key": "BASE64...",
-      "signature": "BASE64...",
-      "key_id": "tpm:ephemeral:ESP_EPHEMERAL_...",
-      "signed_at": "2026-01-10T15:30:00Z",
-      "covers": ["content_hash", "evidence_hash"]
-    }
-  },
-  "summary": {},
-  "checks": [
-    {
-      "identity": {
-        "policy_id": "test-file-metadata-001",
-        "platform": "linux",
-        "criticality": "high",
-        "control_mappings": [...]
-      },
-      "outcome": "pass",
-      "weight": 0.8
-    }
-  ]
-}
-```
-
-### 12.3 Full Result Format
-
-See Section 3-10 for complete structure. Full example:
-
-```json
-{
-  "envelope": {
     "result_id": "esp-result-18892f9d95dcc6b5",
-    "schema_version": "1.0.0",
+    "schema_version": "1.1.0",
     "agent": {
       "id": "esp-agent",
       "name": "esp-agent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "agent_type": "cli"
     },
     "host": {
@@ -787,15 +961,119 @@ See Section 3-10 for complete structure. Full example:
     "content_hash": "sha256:8726504ca47412e0d8c0be36a1286a79...",
     "evidence_hash": "sha256:9fbea98350c00a9642fe91431619dd3a...",
     "signature": {
-      "signer_id": "tpm:sha256:a1b2c3d4e5f6...",
+      "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
       "signer_type": "agent",
-      "algorithm": "tpm-ecdsa-p256",
+      "algorithm": "ecdsa-p256",
       "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...",
       "signature": "MEUCIQC...",
-      "key_id": "tpm:ephemeral:ESP_EPHEMERAL_a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "key_id": "pki:cert:1234567890abcdef",
       "signed_at": "2026-01-23T22:11:22Z",
       "covers": ["content_hash", "evidence_hash"],
-      "certificate_chain": null
+      "certificate_chain": [
+        "-----BEGIN CERTIFICATE-----\n<workload-cert>\n-----END CERTIFICATE-----",
+        "-----BEGIN CERTIFICATE-----\n<workload-ca>\n-----END CERTIFICATE-----",
+        "-----BEGIN CERTIFICATE-----\n<ia-cert>\n-----END CERTIFICATE-----"
+      ],
+      "transparency": {
+        "log_index": 47,
+        "inclusion_proof": {
+          "tree_size": 100,
+          "root_hash": "f6e5d4c3b2a1...",
+          "hashes": ["abc123...", "def456..."]
+        }
+      }
+    },
+    "identity_status": {
+      "bootstrapped": true,
+      "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
+      "error": null,
+      "error_code": null
+    }
+  },
+  "summary": {
+    "total_policies": 3,
+    "passed": 1,
+    "failed": 2,
+    "errors": 0,
+    "by_criticality": {
+      "critical": { "total": 0, "passed": 0, "failed": 0 },
+      "high": { "total": 1, "passed": 1, "failed": 0 },
+      "medium": { "total": 2, "passed": 0, "failed": 2 },
+      "low": { "total": 0, "passed": 0, "failed": 0 },
+      "info": { "total": 0, "passed": 0, "failed": 0 }
+    },
+    "total_weight": 1.8,
+    "passed_weight": 0.8,
+    "posture_score": 0.44444448
+  },
+  "checks": [
+    {
+      "identity": {
+        "policy_id": "test-file-metadata-001",
+        "platform": "linux",
+        "criticality": "high",
+        "control_mappings": [
+          { "framework": "CIS", "control_id": "6.1.1" }
+        ]
+      },
+      "outcome": "pass",
+      "weight": 0.8
+    }
+  ]
+}
+```
+
+### 12.3 Full Result Format
+
+```json
+{
+  "envelope": {
+    "result_id": "esp-result-18892f9d95dcc6b5",
+    "schema_version": "1.1.0",
+    "agent": {
+      "id": "esp-agent",
+      "name": "esp-agent",
+      "version": "1.1.0",
+      "agent_type": "cli"
+    },
+    "host": {
+      "id": "host-ad1bfa7a1863edb2",
+      "hostname": "server01",
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "started_at": "2026-01-23T22:11:22Z",
+    "completed_at": "2026-01-23T22:11:22Z",
+    "content_hash": "sha256:8726504ca47412e0d8c0be36a1286a79...",
+    "evidence_hash": "sha256:9fbea98350c00a9642fe91431619dd3a...",
+    "signature": {
+      "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
+      "signer_type": "agent",
+      "algorithm": "ecdsa-p256",
+      "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...",
+      "signature": "MEUCIQC...",
+      "key_id": "pki:cert:1234567890abcdef",
+      "signed_at": "2026-01-23T22:11:22Z",
+      "covers": ["content_hash", "evidence_hash"],
+      "certificate_chain": [
+        "-----BEGIN CERTIFICATE-----\n<workload-cert>\n-----END CERTIFICATE-----",
+        "-----BEGIN CERTIFICATE-----\n<workload-ca>\n-----END CERTIFICATE-----",
+        "-----BEGIN CERTIFICATE-----\n<ia-cert>\n-----END CERTIFICATE-----"
+      ],
+      "transparency": {
+        "log_index": 47,
+        "inclusion_proof": {
+          "tree_size": 100,
+          "root_hash": "f6e5d4c3b2a1...",
+          "hashes": ["abc123...", "def456..."]
+        }
+      }
+    },
+    "identity_status": {
+      "bootstrapped": true,
+      "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
+      "error": null,
+      "error_code": null
     }
   },
   "summary": {
@@ -863,6 +1141,44 @@ See Section 3-10 for complete structure. Full example:
 }
 ```
 
+### 12.4 Unsigned Result Example
+
+When identity bootstrap fails, results are produced without a signature:
+
+```json
+{
+  "envelope": {
+    "result_id": "esp-result-18892f9d95dcc6b5",
+    "schema_version": "1.1.0",
+    "agent": {
+      "id": "esp-agent",
+      "name": "esp-agent",
+      "version": "1.1.0",
+      "agent_type": "cli"
+    },
+    "host": {
+      "id": "host-ad1bfa7a1863edb2",
+      "hostname": "server01",
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "started_at": "2026-01-23T22:11:22Z",
+    "completed_at": "2026-01-23T22:11:22Z",
+    "content_hash": "sha256:8726504ca47412e0d8c0be36a1286a79...",
+    "evidence_hash": "sha256:9fbea98350c00a9642fe91431619dd3a...",
+    "signature": null,
+    "identity_status": {
+      "bootstrapped": false,
+      "signer_id": "unsigned:agent:server01-a1b2c3d4",
+      "error": "Failed to connect to orchestrator: connection refused",
+      "error_code": "BOOTSTRAP_CONNECTION_FAILED"
+    }
+  },
+  "summary": { ... },
+  "policies": [ ... ]
+}
+```
+
 ---
 
 ## 13. Schema Versioning
@@ -882,16 +1198,42 @@ MAJOR.MINOR.PATCH
 | Breaking field removal | MAJOR | Remove `envelope` |
 | Breaking type change | MAJOR | `policy_id` integer → string |
 | New required field | MAJOR | Add required `signature` |
-| New optional field | MINOR | Add optional `tags` |
+| New optional field | MINOR | Add optional `transparency` |
 | Documentation only | PATCH | Clarify description |
 
-### 13.3 Version Validation
+### 13.3 Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0.0 | 2026-01-08 | Initial v1.0.0 specification |
+| 1.0.1 | 2026-01-10 | Added Signature Block schema (Section 3.5) |
+| 1.1.0 | 2026-01-24 | **Current version** |
+|       |            | Added `transparency` field to SignatureBlock (Section 3.5.9) |
+|       |            | Added `identity_status` field to envelope (Section 3.6) |
+|       |            | Added PKI signer_id format (Section 3.5.3) |
+|       |            | Added `pki:cert:` key_id format (Section 3.5.5) |
+|       |            | Updated certificate_chain semantics for PKI (Section 3.5.8) |
+|       |            | Changed default output format to `assessor` |
+|       |            | Added unsigned result example (Section 12.4) |
+|       |            | Deprecated TPM and software-only signing modes |
+
+### 13.4 Version Validation
 
 Consumers SHOULD validate `schema_version` before processing:
 
 ```rust
-if !schema_version.starts_with("1.") {
+let version = &envelope.schema_version;
+if !version.starts_with("1.") {
     return Err("Unsupported schema version");
+}
+
+// For v1.1.0+ features
+let minor: u32 = version.split('.').nth(1)
+    .and_then(|s| s.parse().ok())
+    .unwrap_or(0);
+
+if minor >= 1 {
+    // Can use transparency and identity_status fields
 }
 ```
 
@@ -905,6 +1247,7 @@ if !schema_version.starts_with("1.") {
 |-------|------------|
 | `envelope.schema_version` | Valid SemVer |
 | `envelope.result_id` | Non-empty, starts with `esp-result-` |
+| `envelope.identity_status` | Required object (v1.1.0+) |
 | `identity.policy_id` | Non-empty string |
 | `identity.platform` | Known platform value |
 | `identity.criticality` | Valid enum value |
@@ -918,6 +1261,7 @@ if !schema_version.starts_with("1.") {
 | Criticality breakdown | `total_policies == sum(by_criticality[*].total)` |
 | Posture score | `posture_score == passed_weight / total_weight` |
 | Evidence hash | Matches hash of all evidence data |
+| Identity consistency | `envelope.signature.signer_id == envelope.identity_status.signer_id` (when signed) |
 
 ### 14.3 Signature Validation
 
@@ -925,11 +1269,31 @@ if !schema_version.starts_with("1.") {
 |------|------------|
 | Covers field | Must contain `["content_hash", "evidence_hash"]` |
 | Algorithm | Must be known algorithm value |
-| Public key | Must be valid Base64 |
+| Public key | Must be valid Base64, must match certificate |
 | Signature | Must be valid Base64 |
 | Signed data | `SHA256(content_hash \|\| evidence_hash)` must verify |
+| Certificate chain | Must form valid chain to trusted Root CA |
+| Signer ID match | SAN URI from certificate must match `signer_id` |
 
-### 14.4 Validation Errors
+### 14.4 Transparency Validation
+
+| Rule | Validation |
+|------|------------|
+| Log index | Non-negative integer |
+| Tree size | Must be > log_index |
+| Root hash | Valid hex string, 64 characters (SHA-256) |
+| Hashes array | All valid hex strings |
+| Proof verification | Computed root must match `root_hash` |
+
+### 14.5 Identity Status Validation
+
+| Rule | Validation |
+|------|------------|
+| Bootstrapped consistency | If `true`, `error` and `error_code` must be `null` |
+| Error consistency | If `false` and not disabled, `error` should be non-null |
+| Signer ID format | Must match PKI or unsigned format |
+
+### 14.6 Validation Errors
 
 | Error | Condition |
 |-------|-----------|
@@ -940,6 +1304,12 @@ if !schema_version.starts_with("1.") {
 | `InvalidTimestamp` | Timestamp not ISO 8601 |
 | `InvalidSignature` | Signature verification failed |
 | `UnsupportedAlgorithm` | Unknown signing algorithm |
+| `InvalidCertificateChain` | Chain validation failed |
+| `CertificateExpired` | Signing certificate not valid |
+| `SignerMismatch` | SAN URI doesn't match signer_id |
+| `KeyMismatch` | Public key doesn't match certificate |
+| `InvalidTransparencyProof` | Merkle proof verification failed |
+| `InvalidIdentityStatus` | Identity status fields inconsistent |
 
 ---
 
@@ -967,18 +1337,93 @@ if !schema_version.starts_with("1.") {
 
 ---
 
-## Revision History
+## Appendix A: Migration Guide (v1.0.x to v1.1.0)
 
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.0.0 | 2026-01-08 | Initial v1.0.0 specification |
-|       |            | Updated to match actual implementation output |
-|       |            | Added single envelope design (all policies in one result) |
-|       |            | Updated field names (`control_id` vs `control`) |
-|       |            | Added assessor package schema (Section 11) |
-|       |            | Added output format examples (Section 12) |
-|       |            | Removed ExecutionManifest (internal IR, not output) |
-| 1.0.1 | 2026-01-10 | Added Signature Block schema (Section 3.5) |
-|       |            | Added signature to output format table (Section 2.3) |
-|       |            | Added signature validation rules (Section 14.3) |
-|       |            | Updated examples with signature blocks (Section 12) |
+### A.1 Breaking Changes
+
+None. v1.1.0 is backward compatible with v1.0.x.
+
+### A.2 New Required Fields
+
+| Field | Location | Default for Migration |
+|-------|----------|----------------------|
+| `identity_status` | `envelope` | See A.3 |
+
+### A.3 Handling Legacy Results
+
+When processing v1.0.x results that lack `identity_status`:
+
+```json
+{
+  "bootstrapped": false,
+  "signer_id": "legacy:unknown",
+  "error": "Pre-v1.1.0 result without identity status",
+  "error_code": "LEGACY_RESULT"
+}
+```
+
+### A.4 New Optional Fields
+
+| Field | Location | When Present |
+|-------|----------|--------------|
+| `transparency` | `signature` | PKI-signed results |
+| `certificate_chain` | `signature` | PKI-signed results (was optional, now expected) |
+
+### A.5 Deprecated Features
+
+| Feature | Status | Replacement |
+|---------|--------|-------------|
+| TPM signing (`tpm-ecdsa-p256`) | Deprecated | PKI signing (`ecdsa-p256` with certificate chain) |
+| Software-only signing | Deprecated | PKI signing |
+| `tpm:sha256:*` signer_id format | Deprecated | PKI SAN URI format |
+| `software:sha256:*` signer_id format | Deprecated | PKI SAN URI format |
+
+---
+
+## Appendix B: Trust System Integration
+
+### B.1 Architecture Overview
+
+The ESP agent integrates with a Trust System that provides:
+
+| Component | Function |
+|-----------|----------|
+| Identity Provider | Issues JWTs based on cloud credentials (AWS STS) |
+| Certificate Issuer | Issues short-lived workload certificates |
+| Transparency Log | Append-only log of certificate issuances |
+| Verifier | Validates signed envelopes |
+
+### B.2 Agent Bootstrap Flow
+
+```
+1. Load configuration
+2. Create AWS STS presigned URL
+3. POST /identity/token → JWT
+4. Generate ECDSA P-256 keypair
+5. POST /identity/enroll with CSR → Certificate + Transparency Proof
+6. Store identity in memory (never persisted)
+7. Ready to sign scan results
+```
+
+### B.3 Signing Flow
+
+```
+1. Complete ESP scan → ScanResult with content_hash, evidence_hash
+2. Compute signed_data = SHA256(content_hash || evidence_hash)
+3. Sign with workload private key
+4. Attach certificate_chain and transparency proof
+5. Output signed result
+```
+
+### B.4 Verification Flow
+
+```
+1. Parse signature block
+2. Verify certificate chain against trusted Root CA
+3. Check certificate validity period
+4. Verify signer_id matches certificate SAN URI
+5. Verify public key matches certificate
+6. Verify ECDSA signature over (content_hash || evidence_hash)
+7. Verify transparency inclusion proof
+8. Optionally fetch checkpoint to verify proof freshness
+```

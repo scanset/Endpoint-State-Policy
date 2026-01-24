@@ -17,6 +17,12 @@
 //! This ensures hash consistency across all output formats (attestation,
 //! full-results, assessor-evidence).
 //!
+//! ## Identity Status
+//!
+//! As of schema v1.1.0, all results include an `identity_status` field that
+//! indicates whether PKI identity was established. This must be provided
+//! when building assessor packages.
+//!
 //! ## Feature Flag
 //!
 //! This module requires the `assessor-evidence` feature, which implies `full-results`.
@@ -32,6 +38,7 @@ use super::error::ResultError;
 use super::evidence::Evidence;
 use super::finding::ComplianceFinding;
 use super::identity::PolicyIdentity;
+use super::identity_status::IdentityStatus;
 use super::summary::ExecutionSummary;
 
 // ============================================================================
@@ -81,6 +88,11 @@ impl AssessorPackage {
     pub fn failed_policies(&self) -> Vec<&AssessorPolicyResult> {
         self.policies_by_outcome(Outcome::Fail)
     }
+
+    /// Check if identity was bootstrapped
+    pub fn is_identity_bootstrapped(&self) -> bool {
+        self.envelope.identity_status.is_bootstrapped()
+    }
 }
 
 // ============================================================================
@@ -113,7 +125,7 @@ pub struct PackageInfo {
 impl Default for PackageInfo {
     fn default() -> Self {
         Self {
-            format_version: "1.0.0".to_string(),
+            format_version: "1.1.0".to_string(),
             generated_at: current_timestamp(),
             purpose: "Compliance assessment verification".to_string(),
             contains_cui: true,
@@ -291,16 +303,24 @@ pub struct CollectionCommand {
 
 /// Builder for constructing AssessorPackage instances
 ///
-/// ## Hash Handling
+/// ## Required Fields
 ///
-/// This builder requires pre-computed hashes from the execution engine.
-/// It does NOT compute hashes itself - this ensures consistency across
-/// all output formats.
+/// The builder requires the following fields to be set before building:
+/// - `content_hash` - Pre-computed from ExecutionManifest
+/// - `evidence_hash` - Pre-computed from ExecutionManifest
+/// - `identity_status` - PKI bootstrap status
+/// - At least one policy result
+///
+/// ## Example
 ///
 /// ```rust,ignore
 /// let builder = AssessorPackageBuilder::new(agent, host)
 ///     .with_content_hash(manifest.content_hash.clone())
-///     .with_evidence_hash(manifest.evidence_hash.clone());
+///     .with_evidence_hash(manifest.evidence_hash.clone())
+///     .with_identity_status(identity_status);
+///
+/// builder.add_policy(policy_result);
+/// let package = builder.build()?;
 /// ```
 pub struct AssessorPackageBuilder {
     agent: AgentInfo,
@@ -308,6 +328,7 @@ pub struct AssessorPackageBuilder {
     policies: Vec<AssessorPolicyResult>,
     content_hash: Option<String>,
     evidence_hash: Option<String>,
+    identity_status: Option<IdentityStatus>,
     notes: Option<String>,
 }
 
@@ -320,6 +341,7 @@ impl AssessorPackageBuilder {
             policies: Vec::new(),
             content_hash: None,
             evidence_hash: None,
+            identity_status: None,
             notes: None,
         }
     }
@@ -347,6 +369,15 @@ impl AssessorPackageBuilder {
         self
     }
 
+    /// Set the identity status
+    ///
+    /// Indicates whether PKI identity was established during bootstrap.
+    /// This is required for schema v1.1.0 compliance.
+    pub fn with_identity_status(mut self, identity_status: IdentityStatus) -> Self {
+        self.identity_status = Some(identity_status);
+        self
+    }
+
     /// Add notes for the package
     pub fn with_notes(mut self, notes: impl Into<String>) -> Self {
         self.notes = Some(notes.into());
@@ -359,7 +390,9 @@ impl AssessorPackageBuilder {
     ///
     /// Returns an error if:
     /// - No policies were added
-    /// - `content_hash` or `evidence_hash` were not provided
+    /// - `content_hash` is not set
+    /// - `evidence_hash` is not set
+    /// - `identity_status` is not set
     pub fn build(self) -> Result<AssessorPackage, ResultError> {
         if self.policies.is_empty() {
             return Err(ResultError::BuildError(
@@ -382,6 +415,11 @@ impl AssessorPackageBuilder {
             )
         })?;
 
+        // Require identity status
+        let identity_status = self.identity_status.ok_or_else(|| {
+            ResultError::BuildError("identity_status is required for schema v1.1.0".to_string())
+        })?;
+
         // Build summary
         let mut summary = ExecutionSummary::new();
         for policy in &self.policies {
@@ -389,8 +427,8 @@ impl AssessorPackageBuilder {
             summary.record(passed, policy.identity.criticality, policy.weight);
         }
 
-        // Build envelope with pre-computed hashes
-        let envelope = ResultEnvelope::new(self.agent, self.host)
+        // Build envelope with pre-computed hashes and identity status
+        let envelope = ResultEnvelope::with_identity(self.agent, self.host, identity_status)
             .with_content_hash(content_hash)
             .with_evidence_hash(evidence_hash);
 
@@ -477,12 +515,15 @@ mod tests {
     }
 
     #[test]
-    fn test_assessor_package_builder_with_hashes() {
+    fn test_assessor_package_builder_with_all_required_fields() {
         let agent = AgentInfo::with_defaults("test-agent");
         let host = HostInfo::from_system();
+        let identity_status = IdentityStatus::success("scanset://test/workload");
+
         let mut builder = AssessorPackageBuilder::new(agent, host)
             .with_content_hash("sha256:content123")
-            .with_evidence_hash("sha256:evidence456");
+            .with_evidence_hash("sha256:evidence456")
+            .with_identity_status(identity_status);
 
         let identity = PolicyIdentity::new(
             "test-policy",
@@ -502,13 +543,25 @@ mod tests {
         // Verify hashes are preserved
         assert_eq!(package.envelope.content_hash, "sha256:content123");
         assert_eq!(package.envelope.evidence_hash, "sha256:evidence456");
+        // Verify identity status
+        assert!(package.is_identity_bootstrapped());
+        assert_eq!(
+            package.envelope.identity_status.signer_id,
+            "scanset://test/workload"
+        );
     }
 
     #[test]
-    fn test_assessor_package_builder_requires_hashes() {
+    fn test_assessor_package_builder_with_failed_identity() {
         let agent = AgentInfo::with_defaults("test-agent");
         let host = HostInfo::from_system();
-        let mut builder = AssessorPackageBuilder::new(agent, host);
+        let identity_status =
+            IdentityStatus::failed("unsigned:agent:test-host", "Timeout", "BOOTSTRAP_TIMEOUT");
+
+        let mut builder = AssessorPackageBuilder::new(agent, host)
+            .with_content_hash("sha256:content")
+            .with_evidence_hash("sha256:evidence")
+            .with_identity_status(identity_status);
 
         let identity = PolicyIdentity::new(
             "test-policy",
@@ -521,10 +574,120 @@ mod tests {
         let policy = AssessorPolicyResult::new(identity, Outcome::Pass, 0.8, vec![], evidence);
 
         builder.add_policy(policy);
+        let package = builder.build().unwrap();
 
-        // Should fail without hashes
+        assert!(!package.is_identity_bootstrapped());
+        assert!(package.envelope.identity_status.has_error());
+        assert_eq!(
+            package.envelope.identity_status.error_code(),
+            Some("BOOTSTRAP_TIMEOUT")
+        );
+    }
+
+    #[test]
+    fn test_assessor_package_builder_requires_policies() {
+        let agent = AgentInfo::with_defaults("test-agent");
+        let host = HostInfo::from_system();
+
+        let builder = AssessorPackageBuilder::new(agent, host)
+            .with_content_hash("sha256:content")
+            .with_evidence_hash("sha256:evidence")
+            .with_identity_status(IdentityStatus::default());
+        // No policies added
+
         let result = builder.build();
         assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("At least one policy result is required"));
+    }
+
+    #[test]
+    fn test_assessor_package_builder_requires_content_hash() {
+        let agent = AgentInfo::with_defaults("test-agent");
+        let host = HostInfo::from_system();
+
+        let mut builder = AssessorPackageBuilder::new(agent, host)
+            // Missing content_hash
+            .with_evidence_hash("sha256:evidence")
+            .with_identity_status(IdentityStatus::default());
+
+        let identity = PolicyIdentity::new(
+            "test-policy",
+            "linux",
+            Criticality::High,
+            vec![ControlMapping::new("CIS", "1.1.1")],
+        );
+
+        let evidence = create_test_evidence();
+        let policy = AssessorPolicyResult::new(identity, Outcome::Pass, 0.8, vec![], evidence);
+        builder.add_policy(policy);
+
+        let result = builder.build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("content_hash is required"));
+    }
+
+    #[test]
+    fn test_assessor_package_builder_requires_evidence_hash() {
+        let agent = AgentInfo::with_defaults("test-agent");
+        let host = HostInfo::from_system();
+
+        let mut builder = AssessorPackageBuilder::new(agent, host)
+            .with_content_hash("sha256:content")
+            // Missing evidence_hash
+            .with_identity_status(IdentityStatus::default());
+
+        let identity = PolicyIdentity::new(
+            "test-policy",
+            "linux",
+            Criticality::High,
+            vec![ControlMapping::new("CIS", "1.1.1")],
+        );
+
+        let evidence = create_test_evidence();
+        let policy = AssessorPolicyResult::new(identity, Outcome::Pass, 0.8, vec![], evidence);
+        builder.add_policy(policy);
+
+        let result = builder.build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("evidence_hash is required"));
+    }
+
+    #[test]
+    fn test_assessor_package_builder_requires_identity_status() {
+        let agent = AgentInfo::with_defaults("test-agent");
+        let host = HostInfo::from_system();
+
+        let mut builder = AssessorPackageBuilder::new(agent, host)
+            .with_content_hash("sha256:content")
+            .with_evidence_hash("sha256:evidence");
+        // Missing identity_status
+
+        let identity = PolicyIdentity::new(
+            "test-policy",
+            "linux",
+            Criticality::High,
+            vec![ControlMapping::new("CIS", "1.1.1")],
+        );
+
+        let evidence = create_test_evidence();
+        let policy = AssessorPolicyResult::new(identity, Outcome::Pass, 0.8, vec![], evidence);
+        builder.add_policy(policy);
+
+        let result = builder.build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("identity_status is required"));
     }
 
     #[test]
@@ -541,6 +704,40 @@ mod tests {
     fn test_package_info_default() {
         let info = PackageInfo::default();
         assert!(info.contains_cui);
-        assert_eq!(info.format_version, "1.0.0");
+        assert_eq!(info.format_version, "1.1.0");
+    }
+
+    #[test]
+    fn test_serialization_with_identity_status() {
+        let agent = AgentInfo::with_defaults("test-agent");
+        let host = HostInfo::from_system();
+        let identity_status = IdentityStatus::success("scanset://test");
+
+        let mut builder = AssessorPackageBuilder::new(agent, host)
+            .with_content_hash("sha256:content")
+            .with_evidence_hash("sha256:evidence")
+            .with_identity_status(identity_status);
+
+        let identity = PolicyIdentity::new(
+            "test-policy",
+            "linux",
+            Criticality::High,
+            vec![ControlMapping::new("CIS", "1.1.1")],
+        );
+
+        let evidence = create_test_evidence();
+        let policy = AssessorPolicyResult::new(identity, Outcome::Pass, 0.8, vec![], evidence);
+        builder.add_policy(policy);
+
+        let package = builder.build().unwrap();
+        let json = serde_json::to_string_pretty(&package).unwrap();
+
+        // Verify identity_status is in the JSON
+        assert!(json.contains("\"identity_status\":"));
+        assert!(json.contains("\"bootstrapped\": true"));
+
+        // Verify it can be parsed back
+        let parsed: AssessorPackage = serde_json::from_str(&json).unwrap();
+        assert!(parsed.is_identity_bootstrapped());
     }
 }

@@ -16,6 +16,10 @@
 //! (feature: attestation)                     (feature: full-results)
 //! │                                               │
 //! ├── envelope (with signature block)            ├── envelope
+//! │   ├── identity_status                        │   ├── identity_status
+//! │   └── signature                              │   └── signature
+//! │       ├── certificate_chain                  │       ├── certificate_chain
+//! │       └── transparency                       │       └── transparency
 //! ├── summary                                    ├── summary
 //! └── checks[]                                   └── policies[]
 //!     ├── identity                                   ├── identity
@@ -30,6 +34,12 @@
 //! - `attestation` (default) - CUI-free results for SaaS/network transport
 //! - `full-results` - Complete results with evidence (local storage only)
 //! - `assessor-evidence` - Full results with collection commands (implies full-results)
+//!
+//! ## Schema Version
+//!
+//! This module implements ESP v1.1.0 Canonical Execution Schema, which includes:
+//! - `identity_status` in envelope (required) - PKI bootstrap status
+//! - `transparency` in signature block (optional) - Certificate transparency proof
 //!
 //! ## Hash Architecture
 //!
@@ -49,6 +59,9 @@
 //! | Evidence hash        | ✓           | ✓            | ✓                 |
 //! | Content hash         | ✓           | ✓            | ✓                 |
 //! | Host ID              | ✓           | ✓            | ✓                 |
+//! | Identity status      | ✓           | ✓            | ✓                 |
+//! | Signature            | ✓           | ✓            | ✓                 |
+//! | Transparency proof   | ✓           | ✓            | ✓                 |
 //! | Findings             | ✗           | ✓            | ✓                 |
 //! | Evidence data        | ✗           | ✓            | ✓                 |
 //! | Collection method    | ✗           | ✓            | ✓                 |
@@ -61,9 +74,10 @@
 //! ### Building Attestations
 //!
 //! ```rust,ignore
-//! use common::results::{ResultBuilder, CheckInput, Criticality, Outcome};
+//! use common::results::{ResultBuilder, CheckInput, Criticality, Outcome, IdentityStatus};
 //!
 //! let builder = ResultBuilder::from_system("agent-001");
+//! let identity_status = IdentityStatus::success("scanset://prod/aws/...");
 //!
 //! let checks = vec![
 //!     CheckInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass),
@@ -75,15 +89,17 @@
 //!     checks,
 //!     manifest.content_hash,
 //!     manifest.evidence_hash,
+//!     identity_status,
 //! )?;
 //! ```
 //!
 //! ### Building Full Results
 //!
 //! ```rust,ignore
-//! use common::results::{ResultBuilder, PolicyInput, Criticality, Outcome};
+//! use common::results::{ResultBuilder, PolicyInput, Criticality, Outcome, IdentityStatus};
 //!
 //! let builder = ResultBuilder::from_system("agent-001");
+//! let identity_status = IdentityStatus::disabled("unsigned:agent:host-abc123");
 //!
 //! let policies = vec![
 //!     PolicyInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass)
@@ -96,6 +112,7 @@
 //!     policies,
 //!     manifest.content_hash,
 //!     manifest.evidence_hash,
+//!     identity_status,
 //! )?;
 //! ```
 
@@ -112,7 +129,9 @@ pub mod envelope;
 pub mod evidence;
 pub mod finding;
 pub mod identity;
+pub mod identity_status;
 pub mod summary;
+pub mod transparency;
 
 pub mod builder;
 
@@ -140,11 +159,13 @@ pub use common::{
 pub use error::ResultError;
 
 pub use collection_method::{CollectionMethod, CollectionMethodBuilder, CollectionMethodType};
-pub use envelope::{AgentInfo, HostInfo, ResultEnvelope, SignatureBlock};
+pub use envelope::{AgentInfo, HostInfo, ResultEnvelope, SignatureBlock, SCHEMA_VERSION};
 pub use evidence::{CollectionRecord, Evidence};
 pub use finding::{ComplianceFinding, FindingBuilder, FindingSeverity};
 pub use identity::PolicyIdentity;
+pub use identity_status::{generate_unsigned_signer_id, IdentityStatus};
 pub use summary::{CriticalityBreakdown, CriticalityStats, ExecutionSummary, ScanSummary};
+pub use transparency::{InclusionProof, TransparencyProof};
 
 pub use builder::ResultBuilder;
 

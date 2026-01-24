@@ -12,6 +12,12 @@
 //! This ensures hash consistency across all output formats (attestation,
 //! full-results, assessor-evidence).
 //!
+//! ## Identity Status
+//!
+//! As of schema v1.1.0, all results include an `identity_status` field that
+//! indicates whether PKI identity was established. This must be provided
+//! when building full results.
+//!
 //! ## Feature
 //!
 //! This module requires the `full-results` feature.
@@ -24,6 +30,7 @@ use super::error::ResultError;
 use super::evidence::Evidence;
 use super::finding::ComplianceFinding;
 use super::identity::PolicyIdentity;
+use super::identity_status::IdentityStatus;
 use super::summary::ScanSummary;
 
 /// Complete scan result with evidence
@@ -83,6 +90,11 @@ impl FullResult {
             .iter()
             .filter(|p| p.outcome.is_fail())
             .collect()
+    }
+
+    /// Check if identity was bootstrapped
+    pub fn is_identity_bootstrapped(&self) -> bool {
+        self.envelope.identity_status.is_bootstrapped()
     }
 
     /// Serialize to JSON
@@ -207,16 +219,23 @@ impl PolicyResult {
 
 /// Builder for constructing full results
 ///
-/// ## Hash Handling
+/// ## Required Fields
 ///
-/// This builder requires pre-computed hashes from the execution engine.
-/// It does NOT compute hashes itself - this ensures consistency across
-/// all output formats.
+/// The builder requires the following fields to be set before building:
+/// - `content_hash` - Pre-computed from ExecutionManifest
+/// - `evidence_hash` - Pre-computed from ExecutionManifest
+/// - `identity_status` - PKI bootstrap status
+///
+/// ## Example
 ///
 /// ```rust,ignore
 /// let builder = FullResultBuilder::new(agent, host)
 ///     .with_content_hash(manifest.content_hash.clone())
-///     .with_evidence_hash(manifest.evidence_hash.clone());
+///     .with_evidence_hash(manifest.evidence_hash.clone())
+///     .with_identity_status(identity_status);
+///
+/// builder.add_policy(policy_result);
+/// let result = builder.build()?;
 /// ```
 pub struct FullResultBuilder {
     agent: AgentInfo,
@@ -224,6 +243,7 @@ pub struct FullResultBuilder {
     policies: Vec<PolicyResult>,
     content_hash: Option<String>,
     evidence_hash: Option<String>,
+    identity_status: Option<IdentityStatus>,
 }
 
 impl FullResultBuilder {
@@ -235,6 +255,7 @@ impl FullResultBuilder {
             policies: Vec::new(),
             content_hash: None,
             evidence_hash: None,
+            identity_status: None,
         }
     }
 
@@ -279,12 +300,23 @@ impl FullResultBuilder {
         self
     }
 
+    /// Set the identity status
+    ///
+    /// Indicates whether PKI identity was established during bootstrap.
+    /// This is required for schema v1.1.0 compliance.
+    pub fn with_identity_status(mut self, identity_status: IdentityStatus) -> Self {
+        self.identity_status = Some(identity_status);
+        self
+    }
+
     /// Build the full result
     ///
     /// ## Errors
     ///
-    /// Returns an error if `content_hash` or `evidence_hash` were not provided.
-    /// These are required to ensure hash consistency across output formats.
+    /// Returns an error if any required field is not set:
+    /// - `content_hash`
+    /// - `evidence_hash`
+    /// - `identity_status`
     pub fn build(self) -> Result<FullResult, ResultError> {
         // Require pre-computed hashes
         let content_hash = self.content_hash.ok_or_else(|| {
@@ -301,6 +333,11 @@ impl FullResultBuilder {
             )
         })?;
 
+        // Require identity status
+        let identity_status = self.identity_status.ok_or_else(|| {
+            ResultError::BuildError("identity_status is required for schema v1.1.0".to_string())
+        })?;
+
         // Build summary from policies
         let mut summary = ScanSummary::new();
         for policy in &self.policies {
@@ -311,8 +348,8 @@ impl FullResultBuilder {
             }
         }
 
-        // Build envelope with pre-computed hashes
-        let envelope = ResultEnvelope::new(self.agent, self.host)
+        // Build envelope with pre-computed hashes and identity status
+        let envelope = ResultEnvelope::with_identity(self.agent, self.host, identity_status)
             .with_content_hash(content_hash)
             .with_evidence_hash(evidence_hash);
 
@@ -363,13 +400,15 @@ mod tests {
     }
 
     #[test]
-    fn test_full_result_builder_with_hashes() {
+    fn test_full_result_builder_with_all_required_fields() {
         let agent = AgentInfo::new("agent-1", "test", "1.0.0", "cli");
         let host = HostInfo::new("host-1", "testhost", "linux", "x86_64");
+        let identity_status = IdentityStatus::success("scanset://test/workload");
 
         let mut builder = FullResultBuilder::new(agent, host)
             .with_content_hash("sha256:content123")
-            .with_evidence_hash("sha256:evidence456");
+            .with_evidence_hash("sha256:evidence456")
+            .with_identity_status(identity_status);
 
         builder.add_policy_result(
             "policy-1",
@@ -408,14 +447,25 @@ mod tests {
         // Verify hashes are preserved
         assert_eq!(result.envelope.content_hash, "sha256:content123");
         assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
+        // Verify identity status
+        assert!(result.is_identity_bootstrapped());
+        assert_eq!(
+            result.envelope.identity_status.signer_id,
+            "scanset://test/workload"
+        );
     }
 
     #[test]
-    fn test_full_result_builder_requires_hashes() {
+    fn test_full_result_builder_with_failed_identity() {
         let agent = AgentInfo::default();
         let host = HostInfo::default();
+        let identity_status = IdentityStatus::disabled("unsigned:agent:test-host");
 
-        let mut builder = FullResultBuilder::new(agent, host);
+        let mut builder = FullResultBuilder::new(agent, host)
+            .with_content_hash("sha256:content")
+            .with_evidence_hash("sha256:evidence")
+            .with_identity_status(identity_status);
+
         builder.add_policy_result(
             "test",
             "linux",
@@ -427,9 +477,97 @@ mod tests {
             Evidence::new(),
         );
 
-        // Should fail without hashes
+        let result = builder.build().unwrap();
+
+        assert!(!result.is_identity_bootstrapped());
+        assert!(result.envelope.identity_status.is_disabled());
+    }
+
+    #[test]
+    fn test_full_result_builder_requires_content_hash() {
+        let agent = AgentInfo::default();
+        let host = HostInfo::default();
+
+        let mut builder = FullResultBuilder::new(agent, host)
+            // Missing content_hash
+            .with_evidence_hash("sha256:evidence")
+            .with_identity_status(IdentityStatus::default());
+
+        builder.add_policy_result(
+            "test",
+            "linux",
+            Criticality::Medium,
+            vec![],
+            Outcome::Pass,
+            0.5,
+            vec![],
+            Evidence::new(),
+        );
+
         let result = builder.build();
         assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("content_hash is required"));
+    }
+
+    #[test]
+    fn test_full_result_builder_requires_evidence_hash() {
+        let agent = AgentInfo::default();
+        let host = HostInfo::default();
+
+        let mut builder = FullResultBuilder::new(agent, host)
+            .with_content_hash("sha256:content")
+            // Missing evidence_hash
+            .with_identity_status(IdentityStatus::default());
+
+        builder.add_policy_result(
+            "test",
+            "linux",
+            Criticality::Medium,
+            vec![],
+            Outcome::Pass,
+            0.5,
+            vec![],
+            Evidence::new(),
+        );
+
+        let result = builder.build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("evidence_hash is required"));
+    }
+
+    #[test]
+    fn test_full_result_builder_requires_identity_status() {
+        let agent = AgentInfo::default();
+        let host = HostInfo::default();
+
+        let mut builder = FullResultBuilder::new(agent, host)
+            .with_content_hash("sha256:content")
+            .with_evidence_hash("sha256:evidence");
+        // Missing identity_status
+
+        builder.add_policy_result(
+            "test",
+            "linux",
+            Criticality::Medium,
+            vec![],
+            Outcome::Pass,
+            0.5,
+            vec![],
+            Evidence::new(),
+        );
+
+        let result = builder.build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("identity_status is required"));
     }
 
     #[test]
@@ -439,7 +577,8 @@ mod tests {
 
         let mut builder = FullResultBuilder::new(agent, host)
             .with_content_hash("sha256:test")
-            .with_evidence_hash("sha256:test");
+            .with_evidence_hash("sha256:test")
+            .with_identity_status(IdentityStatus::success("scanset://test"));
 
         builder.add_policy_result(
             "test",
@@ -454,8 +593,14 @@ mod tests {
 
         let result = builder.build().unwrap();
         let json = result.to_json().unwrap();
+
+        // Verify identity_status is in the JSON
+        assert!(json.contains("\"identity_status\":"));
+        assert!(json.contains("\"bootstrapped\": true"));
+
         let parsed = FullResult::from_json(&json).unwrap();
 
         assert_eq!(parsed.policy_count(), 1);
+        assert!(parsed.is_identity_bootstrapped());
     }
 }
