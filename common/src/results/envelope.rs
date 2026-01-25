@@ -240,6 +240,18 @@ pub struct SignatureBlock {
     /// Base64-encoded signature value (DER format)
     pub signature: String,
 
+    /// Base64-encoded payload that was signed
+    ///
+    /// This is `SHA256(content_hash || evidence_hash)` - the 32-byte hash
+    /// that was passed to the signing function. Including this allows
+    /// verifiers to directly verify the signature without needing to
+    /// reconstruct the payload from the envelope fields.
+    ///
+    /// Note: The actual ECDSA signature is over `SHA256(payload)` since
+    /// OpenSSL's signer hashes the input before signing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>,
+
     /// Key identifier for external lookup
     ///
     /// Format depends on identity source:
@@ -305,6 +317,7 @@ impl SignatureBlock {
             algorithm: algorithm.into(),
             public_key: public_key.into(),
             signature: signature.into(),
+            payload: None,
             key_id: key_id.into(),
             signed_at: current_timestamp(),
             covers,
@@ -333,6 +346,7 @@ impl SignatureBlock {
         algorithm: impl Into<String>,
         public_key: impl Into<String>,
         signature: impl Into<String>,
+        payload: impl Into<String>, // <-- ADD THIS NEW PARAMETER
         key_id: impl Into<String>,
         signed_at: impl Into<String>,
         certificate_chain: Vec<String>,
@@ -344,6 +358,7 @@ impl SignatureBlock {
             algorithm: algorithm.into(),
             public_key: public_key.into(),
             signature: signature.into(),
+            payload: Some(payload.into()), // <-- SET THE PAYLOAD
             key_id: key_id.into(),
             signed_at: signed_at.into(),
             covers: Self::standard_covers(),
@@ -388,6 +403,12 @@ impl SignatureBlock {
     /// Check if this signature has full Level 2 verification support
     pub fn has_level2_support(&self) -> bool {
         self.has_pki() && self.has_transparency()
+    }
+
+    /// Set the signed payload
+    pub fn with_payload(mut self, payload: impl Into<String>) -> Self {
+        self.payload = Some(payload.into());
+        self
     }
 }
 
@@ -680,6 +701,7 @@ mod tests {
             "ecdsa-p256",
             "BASE64_PUBLIC_KEY",
             "BASE64_SIGNATURE",
+            "BASE64_PAYLOAD", // <-- ADD THIS
             "pki:cert:1234567890abcdef",
             "2026-01-24T12:00:00Z",
             vec!["CERT1".to_string(), "CERT2".to_string()],
@@ -791,13 +813,14 @@ mod tests {
         );
 
         let sig = SignatureBlock::with_pki(
-            "scanset://test",
+            "scanset://prod/aws/account/123/workload/agent",
             "ecdsa-p256",
-            "pubkey",
-            "signature",
-            "pki:cert:abc",
+            "BASE64_PUBLIC_KEY",
+            "BASE64_SIGNATURE",
+            "BASE64_PAYLOAD", // <-- ADD THIS
+            "pki:cert:1234567890abcdef",
             "2026-01-24T12:00:00Z",
-            vec!["CERT".to_string()],
+            vec!["CERT1".to_string(), "CERT2".to_string()],
             transparency,
         );
 

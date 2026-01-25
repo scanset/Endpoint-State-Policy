@@ -1,8 +1,8 @@
-# ESP v1.1.0 — Canonical Execution Schema
+# ESP v1.1.1 — Canonical Execution Schema
 
-**Version:** 1.1.0
+**Version:** 1.1.1
 **Status:** Normative
-**Last Updated:** 2026-01-24
+**Last Updated:** 2026-01-25
 
 ---
 
@@ -101,7 +101,7 @@ All output formats share a common envelope structure:
 {
   "id": "esp-agent",
   "name": "esp-agent",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "agent_type": "cli"
 }
 ```
@@ -144,6 +144,7 @@ The signature block provides cryptographic proof of result integrity and agent i
   "algorithm": "ecdsa-p256",
   "public_key": "BASE64_ENCODED_PUBLIC_KEY",
   "signature": "BASE64_ENCODED_SIGNATURE",
+  "payload": "BASE64_ENCODED_PAYLOAD",
   "key_id": "pki:cert:1234567890abcdef",
   "signed_at": "2026-01-10T15:30:00Z",
   "covers": ["content_hash", "evidence_hash"],
@@ -172,6 +173,7 @@ The signature block provides cryptographic proof of result integrity and agent i
 | `algorithm` | string | Yes | Signing algorithm identifier (see 3.5.4) |
 | `public_key` | string | Yes | Base64-encoded public key for verification |
 | `signature` | string | Yes | Base64-encoded signature value |
+| `payload` | string | Yes* | Base64-encoded signed payload (see 3.5.6) |
 | `key_id` | string | Yes | Key identifier for external lookup (see 3.5.5) |
 | `signed_at` | string | Yes | ISO 8601 timestamp when signature was created |
 | `covers` | array | Yes | Fields covered by signature |
@@ -224,7 +226,7 @@ The `key_id` format depends on the identity source:
 | TPM (Legacy) | `tpm:ephemeral:<key_name>` | `tpm:ephemeral:ESP_EPHEMERAL_a1b2c3d4-...` |
 | Software (Legacy) | `software:ephemeral:<uuid>` | `software:ephemeral:550e8400-e29b-...` |
 
-#### 3.5.6 Signed Data
+#### 3.5.6 Signed Data and Payload
 
 The signature covers the concatenation of `content_hash` and `evidence_hash`:
 
@@ -239,6 +241,26 @@ content_hash  = "sha256:8726504ca47412e0d8c0be36a1286a79..."
 evidence_hash = "sha256:9fbea98350c00a9642fe91431619dd3a..."
 signed_data   = SHA256("sha256:8726504ca47412e0d8c0be36a1286a79...sha256:9fbea98350c00a9642fe91431619dd3a...")
 ```
+
+**Payload Field (v1.1.1+):**
+
+The `payload` field contains the Base64-encoded `signed_data` (the 32-byte SHA-256 hash). This field is included to simplify verification by providing the exact bytes that were signed, eliminating the need for verifiers to reconstruct the payload from the envelope fields.
+
+```
+payload = Base64(signed_data)
+        = Base64(SHA256(content_hash || evidence_hash))
+```
+
+**Important:** The ECDSA signature is computed as `ECDSA_Sign(SHA256(signed_data))` because the OpenSSL signing API hashes the input before signing. This means the actual cryptographic operation is:
+
+```
+signature = ECDSA_Sign(SHA256(SHA256(content_hash || evidence_hash)))
+```
+
+When verifying:
+1. Decode `payload` from Base64 → 32 bytes
+2. The verifier's ECDSA implementation will hash these 32 bytes before verification
+3. This matches what the agent signed
 
 #### 3.5.7 Verification Levels
 
@@ -326,6 +348,7 @@ To fully verify a signed result with PKI identity:
 1. PARSE signature block
    - Decode public_key from Base64
    - Decode signature from Base64
+   - Decode payload from Base64 (v1.1.1+)
    - Parse certificate_chain PEM certificates
 
 2. VERIFY certificate chain
@@ -345,8 +368,11 @@ To fully verify a signed result with PKI identity:
    - If mismatch: REJECT
 
 5. VERIFY cryptographic signature
-   - Reconstruct: signed_data = SHA256(envelope.content_hash || envelope.evidence_hash)
-   - ECDSA_Verify(signed_data, signature, public_key)
+   - If payload field present (v1.1.1+):
+     - Use decoded payload directly as verification input
+   - If payload field absent (v1.1.0):
+     - Reconstruct: signed_data = SHA256(envelope.content_hash || envelope.evidence_hash)
+   - ECDSA_Verify(payload, signature, public_key)
    - If invalid: REJECT
 
 6. VERIFY transparency proof
@@ -882,7 +908,7 @@ The assessor package extends the full result with reproducibility information:
 
 ```json
 {
-  "format_version": "1.1.0",
+  "format_version": "1.1.1",
   "generated_at": "2026-01-23T22:15:06Z",
   "purpose": "Compliance assessment verification",
   "contains_cui": true,
@@ -911,7 +937,7 @@ The assessor package extends the full result with reproducibility information:
   "agent": {
     "id": "esp-agent",
     "name": "esp-agent",
-    "version": "1.1.0"
+    "version": "1.1.1"
   },
   "summary": {
     "total_policies": 3,
@@ -943,11 +969,11 @@ The assessor package extends the full result with reproducibility information:
 {
   "envelope": {
     "result_id": "esp-result-18892f9d95dcc6b5",
-    "schema_version": "1.1.0",
+    "schema_version": "1.1.1",
     "agent": {
       "id": "esp-agent",
       "name": "esp-agent",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "agent_type": "cli"
     },
     "host": {
@@ -966,6 +992,7 @@ The assessor package extends the full result with reproducibility information:
       "algorithm": "ecdsa-p256",
       "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...",
       "signature": "MEUCIQC...",
+      "payload": "8JoFLGh3x2kQY5n...",
       "key_id": "pki:cert:1234567890abcdef",
       "signed_at": "2026-01-23T22:11:22Z",
       "covers": ["content_hash", "evidence_hash"],
@@ -1029,11 +1056,11 @@ The assessor package extends the full result with reproducibility information:
 {
   "envelope": {
     "result_id": "esp-result-18892f9d95dcc6b5",
-    "schema_version": "1.1.0",
+    "schema_version": "1.1.1",
     "agent": {
       "id": "esp-agent",
       "name": "esp-agent",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "agent_type": "cli"
     },
     "host": {
@@ -1052,6 +1079,7 @@ The assessor package extends the full result with reproducibility information:
       "algorithm": "ecdsa-p256",
       "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...",
       "signature": "MEUCIQC...",
+      "payload": "8JoFLGh3x2kQY5n...",
       "key_id": "pki:cert:1234567890abcdef",
       "signed_at": "2026-01-23T22:11:22Z",
       "covers": ["content_hash", "evidence_hash"],
@@ -1149,11 +1177,11 @@ When identity bootstrap fails, results are produced without a signature:
 {
   "envelope": {
     "result_id": "esp-result-18892f9d95dcc6b5",
-    "schema_version": "1.1.0",
+    "schema_version": "1.1.1",
     "agent": {
       "id": "esp-agent",
       "name": "esp-agent",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "agent_type": "cli"
     },
     "host": {
@@ -1207,8 +1235,7 @@ MAJOR.MINOR.PATCH
 |---------|------|---------|
 | 1.0.0 | 2026-01-08 | Initial v1.0.0 specification |
 | 1.0.1 | 2026-01-10 | Added Signature Block schema (Section 3.5) |
-| 1.1.0 | 2026-01-24 | **Current version** |
-|       |            | Added `transparency` field to SignatureBlock (Section 3.5.9) |
+| 1.1.0 | 2026-01-24 | Added `transparency` field to SignatureBlock (Section 3.5.9) |
 |       |            | Added `identity_status` field to envelope (Section 3.6) |
 |       |            | Added PKI signer_id format (Section 3.5.3) |
 |       |            | Added `pki:cert:` key_id format (Section 3.5.5) |
@@ -1216,6 +1243,10 @@ MAJOR.MINOR.PATCH
 |       |            | Changed default output format to `assessor` |
 |       |            | Added unsigned result example (Section 12.4) |
 |       |            | Deprecated TPM and software-only signing modes |
+| 1.1.1 | 2026-01-25 | **Current version** |
+|       |            | Added `payload` field to SignatureBlock (Section 3.5.6) |
+|       |            | Updated verification procedure to use payload (Section 3.5.10) |
+|       |            | Clarified ECDSA double-hashing behavior |
 
 ### 13.4 Version Validation
 
@@ -1234,6 +1265,15 @@ let minor: u32 = version.split('.').nth(1)
 
 if minor >= 1 {
     // Can use transparency and identity_status fields
+}
+
+// For v1.1.1+ features (payload field)
+let patch: u32 = version.split('.').nth(2)
+    .and_then(|s| s.parse().ok())
+    .unwrap_or(0);
+
+if minor >= 1 && patch >= 1 {
+    // Can use payload field directly for verification
 }
 ```
 
@@ -1271,7 +1311,8 @@ if minor >= 1 {
 | Algorithm | Must be known algorithm value |
 | Public key | Must be valid Base64, must match certificate |
 | Signature | Must be valid Base64 |
-| Signed data | `SHA256(content_hash \|\| evidence_hash)` must verify |
+| Payload (v1.1.1+) | Must be valid Base64, 32 bytes when decoded |
+| Signed data | If payload absent: `SHA256(content_hash \|\| evidence_hash)` must verify |
 | Certificate chain | Must form valid chain to trusted Root CA |
 | Signer ID match | SAN URI from certificate must match `signer_id` |
 
@@ -1310,6 +1351,7 @@ if minor >= 1 {
 | `KeyMismatch` | Public key doesn't match certificate |
 | `InvalidTransparencyProof` | Merkle proof verification failed |
 | `InvalidIdentityStatus` | Identity status fields inconsistent |
+| `InvalidPayload` | Payload not valid Base64 or wrong length |
 
 ---
 
@@ -1337,19 +1379,58 @@ if minor >= 1 {
 
 ---
 
-## Appendix A: Migration Guide (v1.0.x to v1.1.0)
+## Appendix A: Migration Guide (v1.1.0 to v1.1.1)
 
 ### A.1 Breaking Changes
 
-None. v1.1.0 is backward compatible with v1.0.x.
+None. v1.1.1 is backward compatible with v1.1.0.
 
-### A.2 New Required Fields
+### A.2 New Optional Fields
+
+| Field | Location | When Present |
+|-------|----------|--------------|
+| `payload` | `signature` | PKI-signed results (v1.1.1+) |
+
+### A.3 Verification with Payload Field
+
+When the `payload` field is present, verifiers can use it directly:
+
+```rust
+// v1.1.1+ verification (preferred)
+if let Some(payload) = &signature.payload {
+    let payload_bytes = base64_decode(payload)?;
+    ecdsa_verify(&payload_bytes, &signature.signature, &public_key)?;
+} else {
+    // v1.1.0 fallback: reconstruct payload
+    let signed_data = sha256(format!("{}{}", content_hash, evidence_hash));
+    ecdsa_verify(&signed_data, &signature.signature, &public_key)?;
+}
+```
+
+### A.4 Backward Compatibility
+
+Verifiers SHOULD:
+1. Check for `payload` field presence
+2. If present, use it directly for verification
+3. If absent, reconstruct the payload from `content_hash` and `evidence_hash`
+
+This ensures compatibility with both v1.1.0 and v1.1.1 signed results.
+
+---
+
+## Appendix B: Migration Guide (v1.0.x to v1.1.x)
+
+### B.1 Breaking Changes
+
+None. v1.1.x is backward compatible with v1.0.x.
+
+### B.2 New Required Fields
 
 | Field | Location | Default for Migration |
 |-------|----------|----------------------|
-| `identity_status` | `envelope` | See A.3 |
+| `identity_status` | `envelope` | See B.3 |
 
-### A.3 Handling Legacy Results
+### B.3 Handling Legacy Results
 
 When processing v1.0.x results that lack `identity_status`:
 
@@ -1362,14 +1443,15 @@ When processing v1.0.x results that lack `identity_status`:
 }
 ```
 
-### A.4 New Optional Fields
+### B.4 New Optional Fields
 
 | Field | Location | When Present |
 |-------|----------|--------------|
 | `transparency` | `signature` | PKI-signed results |
 | `certificate_chain` | `signature` | PKI-signed results (was optional, now expected) |
+| `payload` | `signature` | PKI-signed results (v1.1.1+) |
 
-### A.5 Deprecated Features
+### B.5 Deprecated Features
 
 | Feature | Status | Replacement |
 |---------|--------|-------------|
@@ -1380,9 +1462,9 @@ When processing v1.0.x results that lack `identity_status`:
 
 ---
 
-## Appendix B: Trust System Integration
+## Appendix C: Trust System Integration
 
-### B.1 Architecture Overview
+### C.1 Architecture Overview
 
 The ESP agent integrates with a Trust System that provides:
 
@@ -1393,7 +1475,7 @@ The ESP agent integrates with a Trust System that provides:
 | Transparency Log | Append-only log of certificate issuances |
 | Verifier | Validates signed envelopes |
 
-### B.2 Agent Bootstrap Flow
+### C.2 Agent Bootstrap Flow
 
 ```
 1. Load configuration
@@ -1405,17 +1487,18 @@ The ESP agent integrates with a Trust System that provides:
 7. Ready to sign scan results
 ```
 
-### B.3 Signing Flow
+### C.3 Signing Flow
 
 ```
 1. Complete ESP scan → ScanResult with content_hash, evidence_hash
 2. Compute signed_data = SHA256(content_hash || evidence_hash)
-3. Sign with workload private key
-4. Attach certificate_chain and transparency proof
-5. Output signed result
+3. Sign with workload private key: signature = ECDSA_Sign(SHA256(signed_data))
+4. Base64-encode signed_data as payload field (v1.1.1+)
+5. Attach certificate_chain and transparency proof
+6. Output signed result
 ```
 
-### B.4 Verification Flow
+### C.4 Verification Flow
 
 ```
 1. Parse signature block
@@ -1423,7 +1506,11 @@ The ESP agent integrates with a Trust System that provides:
 3. Check certificate validity period
 4. Verify signer_id matches certificate SAN URI
 5. Verify public key matches certificate
-6. Verify ECDSA signature over (content_hash || evidence_hash)
-7. Verify transparency inclusion proof
-8. Optionally fetch checkpoint to verify proof freshness
+6. If payload field present:
+   - Use payload directly for ECDSA verification
+   Else:
+   - Reconstruct: signed_data = SHA256(content_hash || evidence_hash)
+7. ECDSA_Verify(payload, signature, public_key)
+8. Verify transparency inclusion proof
+9. Optionally fetch checkpoint to verify proof freshness
 ```
