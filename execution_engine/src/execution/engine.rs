@@ -11,6 +11,7 @@
 //! ExecutionEngine::execute()
 //!   └── ExecutionManifest (raw, complete, with canonical hashes)
 //!         ├── Policy identity (id, platform, criticality, mappings)
+//!         ├── Policy metadata (version, title, description, author, tags, extended)
 //!         ├── Tree result (logical structure with pass/fail)
 //!         ├── Collected data (with CollectionMethod)
 //!         ├── Findings (validation failures)
@@ -45,9 +46,12 @@ use crate::types::common::{LogicalOp, ResolvedValue};
 use crate::types::execution_context::{
     ExecutableCriteriaTree, ExecutableCriterion, ExecutableObject, ExecutionContext,
 };
-use crate::types::manifest::{CtnResult, ExecutionManifest, TreeResult};
+use crate::types::manifest::{
+    is_known_meta_field, CtnResult, ExecutionManifest, PolicyMetadataFields, TreeResult,
+};
 use common::ast::nodes::FilterAction;
 use common::metadata::MetaDataBlock;
+use common::results::builder::PolicyMetadata;
 use common::results::common::PolicyOutcome;
 use common::results::crypto::sha256_hash;
 use common::results::{
@@ -107,8 +111,8 @@ impl ExecutionEngine {
         // Collect all collected_data from tree into a single HashMap
         let collected_data = self.collect_all_data_from_tree(&tree_result);
 
-        // Extract metadata
-        let metadata =
+        // Extract metadata block
+        let meta_block =
             self.context
                 .metadata
                 .as_ref()
@@ -118,15 +122,15 @@ impl ExecutionEngine {
                 })?;
 
         // Extract required fields from metadata
-        let policy_id = metadata
+        let policy_id = meta_block
             .policy_id()
             .ok_or_else(|| ExecutionError::ExecutorFailed {
                 ctn_type: "metadata_extraction".to_string(),
-                reason: "Missing esp_scan_id in metadata".to_string(),
+                reason: "Missing esp_id in metadata".to_string(),
             })?
             .to_string();
 
-        let platform = metadata
+        let platform = meta_block
             .platform()
             .ok_or_else(|| ExecutionError::ExecutorFailed {
                 ctn_type: "metadata_extraction".to_string(),
@@ -135,7 +139,7 @@ impl ExecutionEngine {
             .to_string();
 
         let criticality_str =
-            metadata
+            meta_block
                 .criticality()
                 .ok_or_else(|| ExecutionError::ExecutorFailed {
                     ctn_type: "metadata_extraction".to_string(),
@@ -150,7 +154,7 @@ impl ExecutionEngine {
 
         // Parse control mappings
         let control_mapping_str =
-            metadata
+            meta_block
                 .control_mapping()
                 .ok_or_else(|| ExecutionError::ExecutorFailed {
                     ctn_type: "metadata_extraction".to_string(),
@@ -165,6 +169,11 @@ impl ExecutionEngine {
                 }
             })?;
 
+        // ====================================================================
+        // Extract policy metadata (optional + extended fields)
+        // ====================================================================
+        let policy_metadata = self.extract_policy_metadata(meta_block);
+
         // Build criteria counts
         let criteria_counts =
             CriteriaCounts::new(stats.total, stats.passed, stats.failed, stats.errors);
@@ -175,7 +184,7 @@ impl ExecutionEngine {
         // BUILD CANONICAL MANIFESTS AND COMPUTE HASHES (ONCE!)
         // ====================================================================
         let content_manifest =
-            self.build_content_manifest(metadata, &control_mappings, &tree_result);
+            self.build_content_manifest(meta_block, &control_mappings, &tree_result);
         let evidence_manifest = self.build_evidence_manifest(&tree_result);
 
         // Compute hashes ONCE - all output formats MUST use these directly
@@ -194,6 +203,7 @@ impl ExecutionEngine {
             platform,
             criticality,
             control_mappings,
+            metadata: policy_metadata,
             tree_result,
             criteria_counts,
             tree_passed: stats.failed == 0 && stats.errors == 0,
@@ -206,6 +216,61 @@ impl ExecutionEngine {
             executed_at: current_timestamp(),
             execution_duration_ms: execution_duration.as_millis() as u64,
         })
+    }
+
+    // ========================================================================
+    // Metadata Extraction
+    // ========================================================================
+
+    /// Extract policy metadata from META block
+    ///
+    /// Separates known typed fields from extended metadata fields.
+    /// Known fields: version, dsl_schema_version, title, description, author, tags
+    /// Extended fields: everything else (control_objective, assessment_method, etc.)
+    fn extract_policy_metadata(&self, meta_block: &MetaDataBlock) -> PolicyMetadataFields {
+        let mut metadata = PolicyMetadataFields::new();
+
+        // Extract known optional fields
+        if let Some(version) = meta_block.version() {
+            metadata = metadata.with_version(version);
+        }
+
+        if let Some(dsl_version) = meta_block.dsl_schema_version() {
+            metadata = metadata.with_dsl_schema_version(dsl_version);
+        }
+
+        if let Some(title) = meta_block.title() {
+            metadata = metadata.with_title(title);
+        }
+
+        if let Some(description) = meta_block.get("description") {
+            metadata = metadata.with_description(description);
+        }
+
+        if let Some(author) = meta_block.get("author") {
+            metadata = metadata.with_author(author);
+        }
+
+        // Parse tags (comma-separated)
+        if let Some(tags_str) = meta_block.get("tags") {
+            let tags: Vec<String> = tags_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !tags.is_empty() {
+                metadata = metadata.with_tags(tags);
+            }
+        }
+
+        // Extract extended metadata (all fields not in the known list)
+        for (key, value) in &meta_block.fields {
+            if !is_known_meta_field(key) {
+                metadata = metadata.with_extended_field(key.clone(), value.clone());
+            }
+        }
+
+        metadata
     }
 
     // ========================================================================
@@ -1040,7 +1105,7 @@ impl ExecutionEngine {
 #[derive(Debug, Clone)]
 pub struct PolicyExecutionResult {
     /// Policy outcome
-    pub outcome: common::results::PolicyOutcome,
+    pub outcome: PolicyOutcome,
     /// Criteria counts
     pub criteria_counts: CriteriaCounts,
     /// Findings
@@ -1053,6 +1118,11 @@ pub struct PolicyExecutionResult {
     pub content_hash: String,
     /// SHA-256 hash of canonical evidence manifest
     pub evidence_hash: String,
+    /// Policy metadata (optional + extended fields)
+    ///
+    /// Contains version, title, description, author, tags, and any
+    /// framework-specific extended fields from the META block.
+    pub metadata: PolicyMetadata,
 }
 
 impl From<ExecutionManifest> for PolicyExecutionResult {
@@ -1098,6 +1168,9 @@ impl From<ExecutionManifest> for PolicyExecutionResult {
             Some(evidence)
         };
 
+        // Convert PolicyMetadataFields to PolicyMetadata
+        let metadata = manifest.metadata.to_builder_metadata();
+
         Self {
             outcome,
             criteria_counts: manifest.criteria_counts,
@@ -1107,6 +1180,8 @@ impl From<ExecutionManifest> for PolicyExecutionResult {
             // CRITICAL: Carry through the canonical hashes!
             content_hash: manifest.content_hash,
             evidence_hash: manifest.evidence_hash,
+            // CRITICAL: Carry through the metadata!
+            metadata,
         }
     }
 }
@@ -1130,6 +1205,16 @@ impl PolicyExecutionResult {
     /// Check if canonical hashes are present
     pub fn has_valid_hashes(&self) -> bool {
         !self.content_hash.is_empty() && !self.evidence_hash.is_empty()
+    }
+
+    /// Check if metadata has any content
+    pub fn has_metadata(&self) -> bool {
+        !self.metadata.is_empty()
+    }
+
+    /// Get policy metadata
+    pub fn metadata(&self) -> &PolicyMetadata {
+        &self.metadata
     }
 }
 

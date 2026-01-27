@@ -9,6 +9,7 @@
 //! ExecutionEngine::execute()
 //!     └── ExecutionManifest (raw, complete, with canonical hashes)
 //!             ├── Policy identity (id, platform, criticality, mappings)
+//!             ├── Policy metadata (version, title, description, author, tags, extended)
 //!             ├── Tree result (logical structure with pass/fail)
 //!             ├── Collected data (with CollectionMethod)
 //!             ├── Findings (validation failures)
@@ -40,6 +41,151 @@ use common::results::{ComplianceFinding, ControlMapping, CriteriaCounts, Critica
 use std::collections::HashMap;
 
 // ============================================================================
+// Policy Metadata (for ExecutionManifest)
+// ============================================================================
+
+/// Extended policy metadata extracted from META block
+///
+/// Contains all optional and framework-specific fields that flow through
+/// to the final JSON output.
+#[derive(Debug, Clone, Default)]
+pub struct PolicyMetadataFields {
+    /// Policy version/revision (from META `version`)
+    pub version: Option<String>,
+
+    /// DSL schema version (from META `dsl_schema_version`)
+    pub dsl_schema_version: Option<String>,
+
+    /// Policy title (from META `title`)
+    pub title: Option<String>,
+
+    /// Policy description (from META `description`)
+    pub description: Option<String>,
+
+    /// Policy author (from META `author`)
+    pub author: Option<String>,
+
+    /// Policy tags (from META `tags`, comma-separated)
+    pub tags: Vec<String>,
+
+    /// Extended metadata (all other META fields)
+    ///
+    /// Contains framework-specific fields like:
+    /// - control_objective
+    /// - assessment_method
+    /// - implementation_status
+    /// - responsible_role
+    /// - control_origination
+    /// - inherited_from
+    /// - customer_responsibility
+    pub extended: HashMap<String, String>,
+}
+
+impl PolicyMetadataFields {
+    /// Create empty metadata
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set version
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = Some(version.into());
+        self
+    }
+
+    /// Set DSL schema version
+    pub fn with_dsl_schema_version(mut self, version: impl Into<String>) -> Self {
+        self.dsl_schema_version = Some(version.into());
+        self
+    }
+
+    /// Set title
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set description
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set author
+    pub fn with_author(mut self, author: impl Into<String>) -> Self {
+        self.author = Some(author.into());
+        self
+    }
+
+    /// Set tags
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Add an extended metadata field
+    pub fn with_extended_field(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extended.insert(key.into(), value.into());
+        self
+    }
+
+    /// Set all extended metadata
+    pub fn with_extended(mut self, extended: HashMap<String, String>) -> Self {
+        self.extended = extended;
+        self
+    }
+
+    /// Check if metadata has any content
+    pub fn is_empty(&self) -> bool {
+        self.version.is_none()
+            && self.dsl_schema_version.is_none()
+            && self.title.is_none()
+            && self.description.is_none()
+            && self.author.is_none()
+            && self.tags.is_empty()
+            && self.extended.is_empty()
+    }
+
+    /// Convert to common::results::builder::PolicyMetadata
+    ///
+    /// This allows the execution manifest metadata to be passed to the result builders.
+    pub fn to_builder_metadata(&self) -> common::results::builder::PolicyMetadata {
+        common::results::builder::PolicyMetadata {
+            version: self.version.clone(),
+            dsl_schema_version: self.dsl_schema_version.clone(),
+            title: self.title.clone(),
+            description: self.description.clone(),
+            author: self.author.clone(),
+            tags: self.tags.clone(),
+            extended: self.extended.clone(),
+        }
+    }
+}
+
+// ============================================================================
+// Known META field names
+// ============================================================================
+
+/// Fields that are parsed into typed struct fields (not put in extended map)
+pub const KNOWN_META_FIELDS: &[&str] = &[
+    "esp_id",
+    "platform",
+    "criticality",
+    "control_mapping",
+    "version",
+    "dsl_schema_version",
+    "title",
+    "description",
+    "author",
+    "tags",
+];
+
+/// Check if a META field name is a known typed field
+pub fn is_known_meta_field(field_name: &str) -> bool {
+    KNOWN_META_FIELDS.contains(&field_name)
+}
+
+// ============================================================================
 // Execution Manifest
 // ============================================================================
 
@@ -68,9 +214,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct ExecutionManifest {
     // ========================================================================
-    // Policy Identity
+    // Policy Identity (Required)
     // ========================================================================
-    /// Unique policy identifier (from ESP metadata)
+    /// Unique policy identifier (from ESP metadata `esp_id`)
     pub policy_id: String,
 
     /// Target platform (e.g., "kubernetes", "windows", "linux")
@@ -81,6 +227,15 @@ pub struct ExecutionManifest {
 
     /// Control framework mappings (STIG, CIS, etc.)
     pub control_mappings: Vec<ControlMapping>,
+
+    // ========================================================================
+    // Policy Metadata (Optional + Extended)
+    // ========================================================================
+    /// Extended policy metadata (version, title, description, author, tags, etc.)
+    ///
+    /// Contains all optional META fields plus any framework-specific fields
+    /// that should flow through to the final JSON output.
+    pub metadata: PolicyMetadataFields,
 
     // ========================================================================
     // Execution Results
@@ -175,6 +330,7 @@ impl ExecutionManifest {
             platform: platform_str.clone(),
             criticality,
             control_mappings: Vec::new(),
+            metadata: PolicyMetadataFields::new(),
             tree_result: TreeResult::empty(),
             criteria_counts: CriteriaCounts::default(),
             tree_passed: false,
@@ -187,6 +343,18 @@ impl ExecutionManifest {
             executed_at: current_timestamp(),
             execution_duration_ms: 0,
         }
+    }
+
+    /// Set policy metadata
+    pub fn with_metadata(mut self, metadata: PolicyMetadataFields) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Set control mappings
+    pub fn with_control_mappings(mut self, mappings: Vec<ControlMapping>) -> Self {
+        self.control_mappings = mappings;
+        self
     }
 
     /// Check if execution passed
@@ -250,6 +418,16 @@ impl ExecutionManifest {
     pub fn set_evidence_manifest(&mut self, manifest: EvidenceManifest) {
         self.evidence_manifest = manifest;
         self.evidence_hash = self.evidence_manifest.compute_hash();
+    }
+
+    /// Check if metadata has any content
+    pub fn has_metadata(&self) -> bool {
+        !self.metadata.is_empty()
+    }
+
+    /// Get the builder metadata for result construction
+    pub fn builder_metadata(&self) -> common::results::builder::PolicyMetadata {
+        self.metadata.to_builder_metadata()
     }
 }
 
@@ -629,6 +807,35 @@ mod tests {
         assert!(!manifest.is_pass());
         assert_eq!(manifest.collected_object_count(), 0);
         assert!(!manifest.has_valid_hashes()); // Hashes not computed yet
+        assert!(!manifest.has_metadata()); // No metadata yet
+    }
+
+    #[test]
+    fn test_execution_manifest_with_metadata() {
+        let metadata = PolicyMetadataFields::new()
+            .with_version("1.0.0")
+            .with_title("Test Policy")
+            .with_author("security-team")
+            .with_tags(vec!["baseline".to_string(), "rocky9".to_string()])
+            .with_extended_field("control_objective", "CM-6_obj.1")
+            .with_extended_field("assessment_method", "TEST");
+
+        let manifest = ExecutionManifest::new("test-policy", "linux", Criticality::High)
+            .with_metadata(metadata);
+
+        assert!(manifest.has_metadata());
+        assert_eq!(manifest.metadata.version, Some("1.0.0".to_string()));
+        assert_eq!(manifest.metadata.title, Some("Test Policy".to_string()));
+        assert_eq!(manifest.metadata.author, Some("security-team".to_string()));
+        assert_eq!(manifest.metadata.tags, vec!["baseline", "rocky9"]);
+        assert_eq!(
+            manifest.metadata.extended.get("control_objective"),
+            Some(&"CM-6_obj.1".to_string())
+        );
+        assert_eq!(
+            manifest.metadata.extended.get("assessment_method"),
+            Some(&"TEST".to_string())
+        );
     }
 
     #[test]
@@ -704,5 +911,48 @@ mod tests {
         // NOT pass = fail
         let result = TreeResult::block(LogicalOp::And, true, vec![pass.clone()]);
         assert_eq!(result.status, Outcome::Fail);
+    }
+
+    #[test]
+    fn test_policy_metadata_fields_is_empty() {
+        let empty = PolicyMetadataFields::new();
+        assert!(empty.is_empty());
+
+        let with_version = PolicyMetadataFields::new().with_version("1.0.0");
+        assert!(!with_version.is_empty());
+
+        let with_extended = PolicyMetadataFields::new().with_extended_field("key", "value");
+        assert!(!with_extended.is_empty());
+    }
+
+    #[test]
+    fn test_policy_metadata_fields_to_builder_metadata() {
+        let metadata = PolicyMetadataFields::new()
+            .with_version("1.0.0")
+            .with_title("Test")
+            .with_extended_field("custom", "value");
+
+        let builder_meta = metadata.to_builder_metadata();
+
+        assert_eq!(builder_meta.version, Some("1.0.0".to_string()));
+        assert_eq!(builder_meta.title, Some("Test".to_string()));
+        assert_eq!(
+            builder_meta.extended.get("custom"),
+            Some(&"value".to_string())
+        );
+    }
+
+    #[test]
+    fn test_is_known_meta_field() {
+        assert!(is_known_meta_field("esp_id"));
+        assert!(is_known_meta_field("platform"));
+        assert!(is_known_meta_field("version"));
+        assert!(is_known_meta_field("title"));
+        assert!(is_known_meta_field("tags"));
+
+        // Unknown fields
+        assert!(!is_known_meta_field("control_objective"));
+        assert!(!is_known_meta_field("assessment_method"));
+        assert!(!is_known_meta_field("custom_field"));
     }
 }

@@ -21,6 +21,8 @@
 //!     └── identity_status ┴──► AssessorPackage
 //! ```
 
+use std::collections::HashMap;
+
 use super::common::{ControlMapping, Criticality, Outcome};
 use super::envelope::{AgentInfo, HostInfo};
 use super::error::ResultError;
@@ -39,6 +41,128 @@ use super::full::{FullResult, FullResultBuilder, PolicyResult};
 
 #[cfg(feature = "assessor-evidence")]
 use super::assessor::{AssessorPackage, AssessorPackageBuilder, AssessorPolicyResult};
+
+// ============================================================================
+// Policy Metadata (shared across input types)
+// ============================================================================
+
+/// Extended policy metadata for building PolicyIdentity
+///
+/// Contains all the optional and extended fields from META block.
+/// Used by `CheckInput`, `PolicyInput`, and `AssessorInput`.
+#[derive(Debug, Clone, Default)]
+pub struct PolicyMetadata {
+    /// Policy version/revision
+    pub version: Option<String>,
+    /// DSL schema version
+    pub dsl_schema_version: Option<String>,
+    /// Policy title
+    pub title: Option<String>,
+    /// Policy description
+    pub description: Option<String>,
+    /// Policy author
+    pub author: Option<String>,
+    /// Policy tags
+    pub tags: Vec<String>,
+    /// Extended metadata (framework-specific fields)
+    pub extended: HashMap<String, String>,
+}
+
+impl PolicyMetadata {
+    /// Create empty metadata
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set version
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = Some(version.into());
+        self
+    }
+
+    /// Set DSL schema version
+    pub fn with_dsl_schema_version(mut self, version: impl Into<String>) -> Self {
+        self.dsl_schema_version = Some(version.into());
+        self
+    }
+
+    /// Set title
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set description
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set author
+    pub fn with_author(mut self, author: impl Into<String>) -> Self {
+        self.author = Some(author.into());
+        self
+    }
+
+    /// Set tags
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Set extended metadata (replaces existing)
+    pub fn with_extended(mut self, extended: HashMap<String, String>) -> Self {
+        self.extended = extended;
+        self
+    }
+
+    /// Add a single extended metadata field
+    pub fn with_extended_field(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extended.insert(key.into(), value.into());
+        self
+    }
+
+    /// Check if metadata has any content
+    pub fn is_empty(&self) -> bool {
+        self.version.is_none()
+            && self.dsl_schema_version.is_none()
+            && self.title.is_none()
+            && self.description.is_none()
+            && self.author.is_none()
+            && self.tags.is_empty()
+            && self.extended.is_empty()
+    }
+
+    /// Apply this metadata to a PolicyIdentity
+    pub fn apply_to(self, mut identity: PolicyIdentity) -> PolicyIdentity {
+        if let Some(v) = self.version {
+            identity.version = Some(v);
+        }
+        if let Some(v) = self.dsl_schema_version {
+            identity.dsl_schema_version = Some(v);
+        }
+        if let Some(v) = self.title {
+            identity.title = Some(v);
+        }
+        if let Some(v) = self.description {
+            identity.description = Some(v);
+        }
+        if let Some(v) = self.author {
+            identity.author = Some(v);
+        }
+        if !self.tags.is_empty() {
+            identity.tags = self.tags;
+        }
+        if !self.extended.is_empty() {
+            identity.metadata = self.extended;
+        }
+        identity
+    }
+}
+
+// ============================================================================
+// Result Builder
+// ============================================================================
 
 /// Unified result builder
 ///
@@ -86,17 +210,6 @@ impl ResultBuilder {
     /// * `content_hash` - Pre-computed content hash from ExecutionManifest
     /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
     /// * `identity_status` - PKI bootstrap status
-    ///
-    /// ## Example
-    ///
-    /// ```rust,ignore
-    /// let attestation = builder.build_attestation(
-    ///     checks,
-    ///     scan_result.content_hash.clone(),
-    ///     scan_result.evidence_hash.clone(),
-    ///     identity_status,
-    /// )?;
-    /// ```
     #[cfg(feature = "attestation")]
     pub fn build_attestation(
         self,
@@ -111,12 +224,7 @@ impl ResultBuilder {
             .with_identity_status(identity_status);
 
         for check in checks {
-            let identity = PolicyIdentity::new(
-                check.policy_id,
-                check.platform,
-                check.criticality,
-                check.control_mappings,
-            );
+            let identity = check.to_policy_identity();
             let attestation = CheckAttestation::new(identity, check.outcome, check.weight);
             builder.add_check(attestation);
         }
@@ -132,17 +240,6 @@ impl ResultBuilder {
     /// * `content_hash` - Pre-computed content hash from ExecutionManifest
     /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
     /// * `identity_status` - PKI bootstrap status
-    ///
-    /// ## Example
-    ///
-    /// ```rust,ignore
-    /// let full_result = builder.build_full_result(
-    ///     policies,
-    ///     scan_result.content_hash.clone(),
-    ///     scan_result.evidence_hash.clone(),
-    ///     identity_status,
-    /// )?;
-    /// ```
     #[cfg(feature = "full-results")]
     pub fn build_full_result(
         self,
@@ -157,12 +254,7 @@ impl ResultBuilder {
             .with_identity_status(identity_status);
 
         for policy in policies {
-            let identity = PolicyIdentity::new(
-                policy.policy_id,
-                policy.platform,
-                policy.criticality,
-                policy.control_mappings,
-            );
+            let identity = policy.to_policy_identity();
             let result = PolicyResult::new(
                 identity,
                 policy.outcome,
@@ -184,17 +276,6 @@ impl ResultBuilder {
     /// * `content_hash` - Pre-computed content hash from ExecutionManifest
     /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
     /// * `identity_status` - PKI bootstrap status
-    ///
-    /// ## Example
-    ///
-    /// ```rust,ignore
-    /// let assessor_package = builder.build_assessor_package(
-    ///     policies,
-    ///     scan_result.content_hash.clone(),
-    ///     scan_result.evidence_hash.clone(),
-    ///     identity_status,
-    /// )?;
-    /// ```
     #[cfg(feature = "assessor-evidence")]
     pub fn build_assessor_package(
         self,
@@ -209,12 +290,7 @@ impl ResultBuilder {
             .with_identity_status(identity_status);
 
         for policy in policies {
-            let identity = PolicyIdentity::new(
-                policy.policy_id,
-                policy.platform,
-                policy.criticality,
-                policy.control_mappings,
-            );
+            let identity = policy.to_policy_identity();
             let result = AssessorPolicyResult::new(
                 identity,
                 policy.outcome,
@@ -232,13 +308,6 @@ impl ResultBuilder {
     ///
     /// Returns a tuple of (attestation, full_result) where both have
     /// the same content_hash, evidence_hash, and identity_status.
-    ///
-    /// ## Arguments
-    ///
-    /// * `policies` - The policy results with evidence
-    /// * `content_hash` - Pre-computed content hash from ExecutionManifest
-    /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
-    /// * `identity_status` - PKI bootstrap status
     #[cfg(all(feature = "attestation", feature = "full-results"))]
     pub fn build_both(
         self,
@@ -259,6 +328,7 @@ impl ResultBuilder {
                     p.outcome,
                 )
                 .with_weight(p.weight)
+                .with_metadata(p.metadata.clone())
             })
             .collect();
 
@@ -270,12 +340,7 @@ impl ResultBuilder {
                 .with_identity_status(identity_status.clone());
 
             for check in checks {
-                let identity = PolicyIdentity::new(
-                    check.policy_id,
-                    check.platform,
-                    check.criticality,
-                    check.control_mappings,
-                );
+                let identity = check.to_policy_identity();
                 let attestation = CheckAttestation::new(identity, check.outcome, check.weight);
                 builder.add_check(attestation);
             }
@@ -290,12 +355,7 @@ impl ResultBuilder {
                 .with_identity_status(identity_status);
 
             for policy in policies {
-                let identity = PolicyIdentity::new(
-                    policy.policy_id,
-                    policy.platform,
-                    policy.criticality,
-                    policy.control_mappings,
-                );
+                let identity = policy.to_policy_identity();
                 let result = PolicyResult::new(
                     identity,
                     policy.outcome,
@@ -315,13 +375,6 @@ impl ResultBuilder {
     ///
     /// Returns a tuple of (attestation, full_result, assessor_package) where all
     /// have the same content_hash, evidence_hash, and identity_status.
-    ///
-    /// ## Arguments
-    ///
-    /// * `policies` - The policy results with full evidence
-    /// * `content_hash` - Pre-computed content hash from ExecutionManifest
-    /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
-    /// * `identity_status` - PKI bootstrap status
     #[cfg(all(
         feature = "attestation",
         feature = "full-results",
@@ -346,6 +399,7 @@ impl ResultBuilder {
                     p.outcome,
                 )
                 .with_weight(p.weight)
+                .with_metadata(p.metadata.clone())
             })
             .collect();
 
@@ -361,6 +415,7 @@ impl ResultBuilder {
                     p.outcome,
                 )
                 .with_weight(p.weight)
+                .with_metadata(p.metadata.clone())
                 .with_findings(p.findings.clone())
                 .with_evidence(p.evidence.clone())
             })
@@ -374,12 +429,7 @@ impl ResultBuilder {
                 .with_identity_status(identity_status.clone());
 
             for check in checks {
-                let identity = PolicyIdentity::new(
-                    check.policy_id,
-                    check.platform,
-                    check.criticality,
-                    check.control_mappings,
-                );
+                let identity = check.to_policy_identity();
                 let attestation = CheckAttestation::new(identity, check.outcome, check.weight);
                 builder.add_check(attestation);
             }
@@ -394,12 +444,7 @@ impl ResultBuilder {
                 .with_identity_status(identity_status.clone());
 
             for policy in policies {
-                let identity = PolicyIdentity::new(
-                    policy.policy_id,
-                    policy.platform,
-                    policy.criticality,
-                    policy.control_mappings,
-                );
+                let identity = policy.to_policy_identity();
                 let result = PolicyResult::new(
                     identity,
                     policy.outcome,
@@ -420,12 +465,7 @@ impl ResultBuilder {
                 .with_identity_status(identity_status);
 
             for policy in assessor_inputs {
-                let identity = PolicyIdentity::new(
-                    policy.policy_id,
-                    policy.platform,
-                    policy.criticality,
-                    policy.control_mappings,
-                );
+                let identity = policy.to_policy_identity();
                 let result = AssessorPolicyResult::new(
                     identity,
                     policy.outcome,
@@ -456,6 +496,7 @@ pub struct CheckInput {
     pub control_mappings: Vec<ControlMapping>,
     pub outcome: Outcome,
     pub weight: f32,
+    pub metadata: PolicyMetadata,
 }
 
 #[cfg(feature = "attestation")]
@@ -475,6 +516,7 @@ impl CheckInput {
             control_mappings,
             outcome,
             weight: criticality.default_weight(),
+            metadata: PolicyMetadata::default(),
         }
     }
 
@@ -482,6 +524,23 @@ impl CheckInput {
     pub fn with_weight(mut self, weight: f32) -> Self {
         self.weight = weight;
         self
+    }
+
+    /// Set policy metadata
+    pub fn with_metadata(mut self, metadata: PolicyMetadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Convert to PolicyIdentity (borrows self, clones necessary data)
+    pub fn to_policy_identity(&self) -> PolicyIdentity {
+        let identity = PolicyIdentity::new(
+            self.policy_id.clone(),
+            self.platform.clone(),
+            self.criticality,
+            self.control_mappings.clone(),
+        );
+        self.metadata.clone().apply_to(identity)
     }
 }
 
@@ -495,6 +554,7 @@ pub struct PolicyInput {
     pub control_mappings: Vec<ControlMapping>,
     pub outcome: Outcome,
     pub weight: f32,
+    pub metadata: PolicyMetadata,
     pub findings: Vec<ComplianceFinding>,
     pub evidence: Evidence,
 }
@@ -516,6 +576,7 @@ impl PolicyInput {
             control_mappings,
             outcome,
             weight: criticality.default_weight(),
+            metadata: PolicyMetadata::default(),
             findings: Vec::new(),
             evidence: Evidence::new(),
         }
@@ -524,6 +585,12 @@ impl PolicyInput {
     /// Set explicit weight
     pub fn with_weight(mut self, weight: f32) -> Self {
         self.weight = weight;
+        self
+    }
+
+    /// Set policy metadata
+    pub fn with_metadata(mut self, metadata: PolicyMetadata) -> Self {
+        self.metadata = metadata;
         self
     }
 
@@ -538,6 +605,17 @@ impl PolicyInput {
         self.evidence = evidence;
         self
     }
+
+    /// Convert to PolicyIdentity (borrows self, clones necessary data)
+    pub fn to_policy_identity(&self) -> PolicyIdentity {
+        let identity = PolicyIdentity::new(
+            self.policy_id.clone(),
+            self.platform.clone(),
+            self.criticality,
+            self.control_mappings.clone(),
+        );
+        self.metadata.clone().apply_to(identity)
+    }
 }
 
 /// Input for building an assessor policy result
@@ -550,6 +628,7 @@ pub struct AssessorInput {
     pub control_mappings: Vec<ControlMapping>,
     pub outcome: Outcome,
     pub weight: f32,
+    pub metadata: PolicyMetadata,
     pub findings: Vec<ComplianceFinding>,
     pub evidence: Evidence,
 }
@@ -571,6 +650,7 @@ impl AssessorInput {
             control_mappings,
             outcome,
             weight: criticality.default_weight(),
+            metadata: PolicyMetadata::default(),
             findings: Vec::new(),
             evidence: Evidence::new(),
         }
@@ -579,6 +659,12 @@ impl AssessorInput {
     /// Set explicit weight
     pub fn with_weight(mut self, weight: f32) -> Self {
         self.weight = weight;
+        self
+    }
+
+    /// Set policy metadata
+    pub fn with_metadata(mut self, metadata: PolicyMetadata) -> Self {
+        self.metadata = metadata;
         self
     }
 
@@ -592,6 +678,17 @@ impl AssessorInput {
     pub fn with_evidence(mut self, evidence: Evidence) -> Self {
         self.evidence = evidence;
         self
+    }
+
+    /// Convert to PolicyIdentity (borrows self, clones necessary data)
+    pub fn to_policy_identity(&self) -> PolicyIdentity {
+        let identity = PolicyIdentity::new(
+            self.policy_id.clone(),
+            self.platform.clone(),
+            self.criticality,
+            self.control_mappings.clone(),
+        );
+        self.metadata.clone().apply_to(identity)
     }
 }
 
@@ -609,11 +706,82 @@ impl AssessorInput {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_policy_metadata_builder() {
+        let metadata = PolicyMetadata::new()
+            .with_version("1.0.0")
+            .with_title("Test Policy")
+            .with_tags(vec!["baseline".to_string()])
+            .with_extended_field("control_objective", "CM-6_obj.1");
+
+        assert_eq!(metadata.version, Some("1.0.0".to_string()));
+        assert_eq!(metadata.title, Some("Test Policy".to_string()));
+        assert_eq!(metadata.tags, vec!["baseline"]);
+        assert_eq!(
+            metadata.extended.get("control_objective"),
+            Some(&"CM-6_obj.1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_policy_metadata_is_empty() {
+        let empty = PolicyMetadata::new();
+        assert!(empty.is_empty());
+
+        let with_version = PolicyMetadata::new().with_version("1.0.0");
+        assert!(!with_version.is_empty());
+
+        let with_extended = PolicyMetadata::new().with_extended_field("key", "value");
+        assert!(!with_extended.is_empty());
+    }
+
+    #[test]
+    fn test_policy_metadata_apply_to() {
+        let metadata = PolicyMetadata::new()
+            .with_version("1.0.0")
+            .with_title("Test Policy")
+            .with_extended_field("assessment_method", "TEST");
+
+        let identity = PolicyIdentity::new("policy-1", "linux", Criticality::High, vec![]);
+        let updated = metadata.apply_to(identity);
+
+        assert_eq!(updated.version, Some("1.0.0".to_string()));
+        assert_eq!(updated.title, Some("Test Policy".to_string()));
+        assert_eq!(updated.get_meta("assessment_method"), Some("TEST"));
+    }
+
+    #[cfg(feature = "attestation")]
+    #[test]
+    fn test_check_input_with_metadata() {
+        let metadata = PolicyMetadata::new()
+            .with_version("1.0.0")
+            .with_extended_field("control_objective", "CM-6_obj.1");
+
+        let check = CheckInput::new(
+            "policy-1",
+            "linux",
+            Criticality::High,
+            vec![ControlMapping::new("CIS", "1.1.1")],
+            Outcome::Pass,
+        )
+        .with_metadata(metadata);
+
+        let identity = check.to_policy_identity();
+
+        assert_eq!(identity.policy_id, "policy-1");
+        assert_eq!(identity.version, Some("1.0.0".to_string()));
+        assert_eq!(identity.get_meta("control_objective"), Some("CM-6_obj.1"));
+    }
+
     #[cfg(feature = "attestation")]
     #[test]
     fn test_build_attestation() {
         let builder = ResultBuilder::from_system("test-agent");
         let identity_status = IdentityStatus::success("scanset://test");
+
+        let metadata = PolicyMetadata::new()
+            .with_version("1.0.0")
+            .with_title("Test Policy");
 
         let checks = vec![
             CheckInput::new(
@@ -622,7 +790,8 @@ mod tests {
                 Criticality::High,
                 vec![ControlMapping::new("CIS", "1.1.1")],
                 Outcome::Pass,
-            ),
+            )
+            .with_metadata(metadata.clone()),
             CheckInput::new(
                 "policy-2",
                 "linux",
@@ -686,13 +855,18 @@ mod tests {
         let builder = ResultBuilder::from_system("test-agent");
         let identity_status = IdentityStatus::success("scanset://test");
 
+        let metadata = PolicyMetadata::new()
+            .with_version("1.0.0")
+            .with_extended_field("implementation_status", "implemented");
+
         let policies = vec![PolicyInput::new(
             "policy-1",
             "linux",
             Criticality::High,
             vec![ControlMapping::new("CIS", "1.1.1")],
             Outcome::Pass,
-        )];
+        )
+        .with_metadata(metadata)];
 
         let result = builder
             .build_full_result(
@@ -716,13 +890,18 @@ mod tests {
         let builder = ResultBuilder::from_system("test-agent");
         let identity_status = IdentityStatus::disabled("unsigned:agent:test");
 
+        let metadata = PolicyMetadata::new()
+            .with_version("1.0.0")
+            .with_extended_field("responsible_role", "system-admin");
+
         let policies = vec![AssessorInput::new(
             "policy-1",
             "linux",
             Criticality::High,
             vec![ControlMapping::new("CIS", "1.1.1")],
             Outcome::Pass,
-        )];
+        )
+        .with_metadata(metadata)];
 
         let result = builder
             .build_assessor_package(
@@ -747,13 +926,16 @@ mod tests {
         let builder = ResultBuilder::from_system("test-agent");
         let identity_status = IdentityStatus::success("scanset://test");
 
+        let metadata = PolicyMetadata::new().with_version("1.0.0");
+
         let policies = vec![PolicyInput::new(
             "policy-1",
             "linux",
             Criticality::High,
             vec![ControlMapping::new("CIS", "1.1.1")],
             Outcome::Pass,
-        )];
+        )
+        .with_metadata(metadata)];
 
         let (attestation, full_result) = builder
             .build_both(
@@ -794,13 +976,18 @@ mod tests {
         let builder = ResultBuilder::from_system("test-agent");
         let identity_status = IdentityStatus::success("scanset://test");
 
+        let metadata = PolicyMetadata::new()
+            .with_version("1.0.0")
+            .with_extended_field("assessment_method", "TEST");
+
         let policies = vec![PolicyInput::new(
             "policy-1",
             "linux",
             Criticality::High,
             vec![ControlMapping::new("CIS", "1.1.1")],
             Outcome::Pass,
-        )];
+        )
+        .with_metadata(metadata)];
 
         let (attestation, full_result, assessor_package) = builder
             .build_all(

@@ -4,8 +4,27 @@
 //! without including CUI (Controlled Unclassified Information).
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use super::common::{ControlMapping, Criticality};
+
+// ============================================================================
+// Known META field names (for extraction logic)
+// ============================================================================
+
+/// Fields that are parsed into typed struct fields (not put in metadata map)
+pub const KNOWN_META_FIELDS: &[&str] = &[
+    "esp_id",
+    "platform",
+    "criticality",
+    "control_mapping",
+    "version",
+    "dsl_schema_version",
+    "title",
+    "description",
+    "author",
+    "tags",
+];
 
 // ============================================================================
 // PolicyIdentity
@@ -15,14 +34,25 @@ use super::common::{ControlMapping, Criticality};
 ///
 /// Contains the minimum information needed to identify a policy
 /// and its compliance framework mappings without CUI.
+///
+/// ## Field Categories
+///
+/// - **Required**: `policy_id`, `platform`, `criticality`, `control_mappings`
+/// - **Known Optional**: `version`, `dsl_schema_version`, `title`, `description`, `author`, `tags`
+/// - **Extended**: Any other META fields captured in `metadata` HashMap
+///
+/// ## JSON Serialization
+///
+/// The `metadata` field uses `#[serde(flatten)]` so extended fields appear
+/// at the same level as typed fields, enabling framework-agnostic output
+/// that can be transformed to FedRAMP, CKLB, CMMC, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyIdentity {
-    /// Policy identifier from META esp_scan_id
+    // ========================================================================
+    // Required fields (validated at parse time)
+    // ========================================================================
+    /// Policy identifier from META esp_id
     pub policy_id: String,
-
-    /// Policy version (optional)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
 
     /// Target platform from META
     pub platform: String,
@@ -32,10 +62,47 @@ pub struct PolicyIdentity {
 
     /// Control framework mappings
     pub control_mappings: Vec<ControlMapping>,
+
+    // ========================================================================
+    // Known optional fields (typed)
+    // ========================================================================
+    /// Policy version/revision
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+
+    /// DSL schema version
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dsl_schema_version: Option<String>,
+
+    /// Policy title
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+
+    /// Policy description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Policy author
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+
+    /// Policy tags
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+
+    // ========================================================================
+    // Extended metadata (catch-all for framework-specific fields)
+    // ========================================================================
+    /// Extended metadata fields not in the known list
+    ///
+    /// Examples: control_objective, assessment_method, implementation_status,
+    /// responsible_role, control_origination, inherited_from, customer_responsibility
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
 }
 
 impl PolicyIdentity {
-    /// Create a new policy identity
+    /// Create a new policy identity with required fields only
     pub fn new(
         policy_id: impl Into<String>,
         platform: impl Into<String>,
@@ -44,18 +111,97 @@ impl PolicyIdentity {
     ) -> Self {
         Self {
             policy_id: policy_id.into(),
-            version: None,
             platform: platform.into(),
             criticality,
             control_mappings,
+            version: None,
+            dsl_schema_version: None,
+            title: None,
+            description: None,
+            author: None,
+            tags: Vec::new(),
+            metadata: HashMap::new(),
         }
     }
+
+    // ========================================================================
+    // Builder methods for known optional fields
+    // ========================================================================
 
     /// Set policy version
     pub fn with_version(mut self, version: impl Into<String>) -> Self {
         self.version = Some(version.into());
         self
     }
+
+    /// Set DSL schema version
+    pub fn with_dsl_schema_version(mut self, version: impl Into<String>) -> Self {
+        self.dsl_schema_version = Some(version.into());
+        self
+    }
+
+    /// Set policy title
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set policy description
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set policy author
+    pub fn with_author(mut self, author: impl Into<String>) -> Self {
+        self.author = Some(author.into());
+        self
+    }
+
+    /// Set policy tags
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Add a single tag
+    pub fn add_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
+
+    // ========================================================================
+    // Builder methods for extended metadata
+    // ========================================================================
+
+    /// Set extended metadata (replaces existing)
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Add a single extended metadata field
+    pub fn with_meta_field(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
+        self
+    }
+
+    /// Add multiple extended metadata fields
+    pub fn with_meta_fields<I, K, V>(mut self, fields: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        for (k, v) in fields {
+            self.metadata.insert(k.into(), v.into());
+        }
+        self
+    }
+
+    // ========================================================================
+    // Accessor methods
+    // ========================================================================
 
     /// Get the primary control mapping (first one)
     pub fn primary_control(&self) -> Option<&ControlMapping> {
@@ -84,6 +230,21 @@ impl PolicyIdentity {
             .filter(|m| m.framework.eq_ignore_ascii_case(framework))
             .map(|m| m.control_id.as_str())
             .collect()
+    }
+
+    /// Get an extended metadata field by key
+    pub fn get_meta(&self, key: &str) -> Option<&str> {
+        self.metadata.get(key).map(|s| s.as_str())
+    }
+
+    /// Check if an extended metadata field exists
+    pub fn has_meta(&self, key: &str) -> bool {
+        self.metadata.contains_key(key)
+    }
+
+    /// Get all extended metadata keys
+    pub fn meta_keys(&self) -> Vec<&str> {
+        self.metadata.keys().map(|s| s.as_str()).collect()
     }
 }
 
@@ -115,14 +276,63 @@ mod tests {
         assert_eq!(identity.criticality, Criticality::High);
         assert_eq!(identity.control_mappings.len(), 2);
         assert!(identity.version.is_none());
+        assert!(identity.title.is_none());
+        assert!(identity.tags.is_empty());
+        assert!(identity.metadata.is_empty());
     }
 
     #[test]
-    fn test_policy_identity_with_version() {
-        let identity = PolicyIdentity::new("test-policy", "windows", Criticality::Medium, vec![])
-            .with_version("1.2.3");
+    fn test_policy_identity_with_known_optional_fields() {
+        let identity = PolicyIdentity::new("test-policy", "linux", Criticality::Medium, vec![])
+            .with_version("1.2.3")
+            .with_dsl_schema_version("1.0.0")
+            .with_title("Test Policy Title")
+            .with_description("A test policy description")
+            .with_author("security-team")
+            .with_tags(vec!["test".to_string(), "baseline".to_string()]);
 
         assert_eq!(identity.version, Some("1.2.3".to_string()));
+        assert_eq!(identity.dsl_schema_version, Some("1.0.0".to_string()));
+        assert_eq!(identity.title, Some("Test Policy Title".to_string()));
+        assert_eq!(
+            identity.description,
+            Some("A test policy description".to_string())
+        );
+        assert_eq!(identity.author, Some("security-team".to_string()));
+        assert_eq!(identity.tags, vec!["test", "baseline"]);
+    }
+
+    #[test]
+    fn test_policy_identity_with_extended_metadata() {
+        let identity = PolicyIdentity::new("test-policy", "linux", Criticality::High, vec![])
+            .with_meta_field("control_objective", "CM-6_obj.1")
+            .with_meta_field("assessment_method", "TEST")
+            .with_meta_field("implementation_status", "implemented");
+
+        assert_eq!(identity.get_meta("control_objective"), Some("CM-6_obj.1"));
+        assert_eq!(identity.get_meta("assessment_method"), Some("TEST"));
+        assert_eq!(
+            identity.get_meta("implementation_status"),
+            Some("implemented")
+        );
+        assert!(identity.has_meta("control_objective"));
+        assert!(!identity.has_meta("nonexistent"));
+    }
+
+    #[test]
+    fn test_policy_identity_with_meta_fields_batch() {
+        let fields = vec![
+            ("responsible_role", "system-admin"),
+            ("control_origination", "sp-system"),
+            ("inherited_from", "AWS:us-east-1:infrastructure"),
+        ];
+
+        let identity = PolicyIdentity::new("test-policy", "linux", Criticality::High, vec![])
+            .with_meta_fields(fields);
+
+        assert_eq!(identity.get_meta("responsible_role"), Some("system-admin"));
+        assert_eq!(identity.get_meta("control_origination"), Some("sp-system"));
+        assert_eq!(identity.metadata.len(), 3);
     }
 
     #[test]
@@ -192,20 +402,99 @@ mod tests {
     }
 
     #[test]
-    fn test_serialization() {
+    fn test_serialization_minimal() {
         let identity = PolicyIdentity::new(
             "test-policy",
-            "kubernetes",
-            Criticality::Critical,
+            "linux",
+            Criticality::High,
             vec![ControlMapping::new("CIS", "1.1.1")],
-        )
-        .with_version("2.0.0");
+        );
 
         let json = serde_json::to_string(&identity).unwrap();
-        let parsed: PolicyIdentity = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed.policy_id, "test-policy");
-        assert_eq!(parsed.version, Some("2.0.0".to_string()));
-        assert_eq!(parsed.criticality, Criticality::Critical);
+        // Should NOT contain optional fields when empty/None
+        assert!(!json.contains("\"version\""));
+        assert!(!json.contains("\"title\""));
+        assert!(!json.contains("\"tags\""));
+
+        // Should contain required fields
+        assert!(json.contains("\"policy_id\":\"test-policy\""));
+        assert!(json.contains("\"platform\":\"linux\""));
+    }
+
+    #[test]
+    fn test_serialization_full() {
+        let identity = PolicyIdentity::new(
+            "test-policy",
+            "linux",
+            Criticality::High,
+            vec![ControlMapping::new("NIST-800-53", "CM-6")],
+        )
+        .with_version("1.0.0")
+        .with_title("Test Policy")
+        .with_tags(vec!["baseline".to_string()])
+        .with_meta_field("control_objective", "CM-6_obj.1")
+        .with_meta_field("assessment_method", "TEST");
+
+        let json = serde_json::to_string_pretty(&identity).unwrap();
+
+        // Required fields
+        assert!(json.contains("\"policy_id\": \"test-policy\""));
+        assert!(json.contains("\"platform\": \"linux\""));
+
+        // Known optional fields
+        assert!(json.contains("\"version\": \"1.0.0\""));
+        assert!(json.contains("\"title\": \"Test Policy\""));
+        assert!(json.contains("\"tags\""));
+
+        // Extended metadata (flattened - same level as other fields)
+        assert!(json.contains("\"control_objective\": \"CM-6_obj.1\""));
+        assert!(json.contains("\"assessment_method\": \"TEST\""));
+
+        // Should NOT have a nested "metadata" key
+        assert!(!json.contains("\"metadata\":"));
+    }
+
+    #[test]
+    fn test_deserialization_with_extended_fields() {
+        let json = r#"{
+            "policy_id": "test-policy",
+            "platform": "linux",
+            "criticality": "high",
+            "control_mappings": [{"framework": "CIS", "control_id": "1.1.1"}],
+            "version": "1.0.0",
+            "title": "Test Policy",
+            "control_objective": "CM-6_obj.1",
+            "assessment_method": "TEST",
+            "custom_field": "custom_value"
+        }"#;
+
+        let identity: PolicyIdentity = serde_json::from_str(json).unwrap();
+
+        // Required fields
+        assert_eq!(identity.policy_id, "test-policy");
+        assert_eq!(identity.platform, "linux");
+        assert_eq!(identity.criticality, Criticality::High);
+
+        // Known optional fields
+        assert_eq!(identity.version, Some("1.0.0".to_string()));
+        assert_eq!(identity.title, Some("Test Policy".to_string()));
+
+        // Extended metadata (captured in HashMap)
+        assert_eq!(identity.get_meta("control_objective"), Some("CM-6_obj.1"));
+        assert_eq!(identity.get_meta("assessment_method"), Some("TEST"));
+        assert_eq!(identity.get_meta("custom_field"), Some("custom_value"));
+    }
+
+    #[test]
+    fn test_known_meta_fields_constant() {
+        // Ensure the constant contains expected fields
+        assert!(KNOWN_META_FIELDS.contains(&"esp_id"));
+        assert!(KNOWN_META_FIELDS.contains(&"platform"));
+        assert!(KNOWN_META_FIELDS.contains(&"criticality"));
+        assert!(KNOWN_META_FIELDS.contains(&"control_mapping"));
+        assert!(KNOWN_META_FIELDS.contains(&"version"));
+        assert!(KNOWN_META_FIELDS.contains(&"title"));
+        assert!(KNOWN_META_FIELDS.contains(&"tags"));
     }
 }
