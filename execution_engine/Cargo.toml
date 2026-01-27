@@ -1,6 +1,6 @@
 [package]
 name = "execution_engine"
-version = "0.2.0"
+version = "1.1.2"
 edition = "2021"
 authors = ["ESP Team"]
 description = "ESP scanner base"
