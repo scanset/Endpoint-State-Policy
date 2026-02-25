@@ -543,29 +543,7 @@ impl Default for HostInfo {
 
 /// Generate ISO 8601 timestamp
 fn current_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-
-    let secs = duration.as_secs();
-    let days = secs / 86400;
-    let remaining = secs % 86400;
-    let hours = remaining / 3600;
-    let minutes = (remaining % 3600) / 60;
-    let seconds = remaining % 60;
-
-    // Approximate date calculation
-    let years = 1970 + (days / 365);
-    let day_of_year = days % 365;
-    let month = (day_of_year / 30).min(11) + 1;
-    let day = (day_of_year % 30) + 1;
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        years, month, day, hours, minutes, seconds
-    )
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 /// Generate a unique result ID

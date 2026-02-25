@@ -1,6 +1,6 @@
 [package]
 name = "execution_engine"
-version = "1.1.2"
+version.workspace = true
 edition = "2021"
 authors = ["ESP Team"]
 description = "ESP scanner base"
