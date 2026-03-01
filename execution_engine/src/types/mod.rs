@@ -96,9 +96,7 @@ pub use resolution_context::*; // ResolutionContext
 pub use record_traits::*;
 
 // Manifest types
-pub use canonical_manifest::{
-    combine_hashes, ContentManifest, CriterionEvidence, EvidenceManifest, ObjectEvidence,
-};
+pub use canonical_manifest::{combine_hashes, CriterionReplay, ReplayManifest, ReplayTreeNode};
 pub use manifest::{CtnResult, ExecutionManifest, TreeResult, TreeStats};
 
 // ============================================================================

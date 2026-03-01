@@ -5,20 +5,19 @@
 //!
 //! ## Hash Architecture
 //!
-//! All build methods require pre-computed `content_hash` and `evidence_hash`
-//! from the ExecutionManifest. Hashes are computed ONCE during execution
-//! and passed through to ensure consistency across all output formats.
+//! All build methods require a pre-computed `replay_hash` from the
+//! ExecutionManifest. The hash is computed ONCE during execution and
+//! passed through to ensure consistency across all output formats.
 //!
 //! ## Identity Status
 //!
-//! As of schema v1.1.0, all build methods require an `identity_status` parameter
+//! As of schema v1.2.0, all build methods require an `identity_status` parameter
 //! that indicates whether PKI identity was established during bootstrap.
 //!
 //! ```text
 //! ExecutionManifest
-//!     ├── content_hash  ──┬──► AttestationResult
-//!     ├── evidence_hash ──┼──► FullResult
-//!     └── identity_status ┴──► AssessorPackage
+//!     ├── replay_hash     ──┬──► AttestationResult
+//!     └── identity_status ──┴──► FullResult / AssessorPackage
 //! ```
 
 use std::collections::HashMap;
@@ -167,7 +166,7 @@ impl PolicyMetadata {
 /// Unified result builder
 ///
 /// Provides methods to build results based on enabled features.
-/// All methods require pre-computed hashes and identity status.
+/// All methods require a pre-computed replay hash and identity status.
 ///
 /// ## Example
 ///
@@ -175,11 +174,9 @@ impl PolicyMetadata {
 /// let builder = ResultBuilder::from_system("esp-agent");
 /// let identity_status = IdentityStatus::success("scanset://prod/aws/...");
 ///
-/// // All build methods require pre-computed hashes and identity status
 /// let attestation = builder.build_attestation(
 ///     checks,
-///     manifest.content_hash.clone(),
-///     manifest.evidence_hash.clone(),
+///     manifest.replay_hash.clone(),
 ///     identity_status,
 /// )?;
 /// ```
@@ -207,20 +204,17 @@ impl ResultBuilder {
     /// ## Arguments
     ///
     /// * `checks` - The policy check results
-    /// * `content_hash` - Pre-computed content hash from ExecutionManifest
-    /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
+    /// * `replay_hash` - Pre-computed replay hash from ExecutionManifest
     /// * `identity_status` - PKI bootstrap status
     #[cfg(feature = "attestation")]
     pub fn build_attestation(
         self,
         checks: Vec<CheckInput>,
-        content_hash: String,
-        evidence_hash: String,
+        replay_hash: String,
         identity_status: IdentityStatus,
     ) -> Result<AttestationResult, ResultError> {
         let mut builder = AttestationBuilder::new(self.agent, self.host)
-            .with_content_hash(content_hash)
-            .with_evidence_hash(evidence_hash)
+            .with_replay_hash(replay_hash)
             .with_identity_status(identity_status);
 
         for check in checks {
@@ -237,20 +231,17 @@ impl ResultBuilder {
     /// ## Arguments
     ///
     /// * `policies` - The policy results with evidence
-    /// * `content_hash` - Pre-computed content hash from ExecutionManifest
-    /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
+    /// * `replay_hash` - Pre-computed replay hash from ExecutionManifest
     /// * `identity_status` - PKI bootstrap status
     #[cfg(feature = "full-results")]
     pub fn build_full_result(
         self,
         policies: Vec<PolicyInput>,
-        content_hash: String,
-        evidence_hash: String,
+        replay_hash: String,
         identity_status: IdentityStatus,
     ) -> Result<FullResult, ResultError> {
         let mut builder = FullResultBuilder::new(self.agent, self.host)
-            .with_content_hash(content_hash)
-            .with_evidence_hash(evidence_hash)
+            .with_replay_hash(replay_hash)
             .with_identity_status(identity_status);
 
         for policy in policies {
@@ -273,20 +264,17 @@ impl ResultBuilder {
     /// ## Arguments
     ///
     /// * `policies` - The policy results with full evidence and collection details
-    /// * `content_hash` - Pre-computed content hash from ExecutionManifest
-    /// * `evidence_hash` - Pre-computed evidence hash from ExecutionManifest
+    /// * `replay_hash` - Pre-computed replay hash from ExecutionManifest
     /// * `identity_status` - PKI bootstrap status
     #[cfg(feature = "assessor-evidence")]
     pub fn build_assessor_package(
         self,
         policies: Vec<AssessorInput>,
-        content_hash: String,
-        evidence_hash: String,
+        replay_hash: String,
         identity_status: IdentityStatus,
     ) -> Result<AssessorPackage, ResultError> {
         let mut builder = AssessorPackageBuilder::new(self.agent, self.host)
-            .with_content_hash(content_hash)
-            .with_evidence_hash(evidence_hash)
+            .with_replay_hash(replay_hash)
             .with_identity_status(identity_status);
 
         for policy in policies {
@@ -304,16 +292,15 @@ impl ResultBuilder {
         builder.build()
     }
 
-    /// Build both attestation and full result with consistent hashes
+    /// Build both attestation and full result with consistent hash
     ///
     /// Returns a tuple of (attestation, full_result) where both have
-    /// the same content_hash, evidence_hash, and identity_status.
+    /// the same replay_hash and identity_status.
     #[cfg(all(feature = "attestation", feature = "full-results"))]
     pub fn build_both(
         self,
         policies: Vec<PolicyInput>,
-        content_hash: String,
-        evidence_hash: String,
+        replay_hash: String,
         identity_status: IdentityStatus,
     ) -> Result<(AttestationResult, FullResult), ResultError> {
         // Build checks for attestation from policies
@@ -332,11 +319,10 @@ impl ResultBuilder {
             })
             .collect();
 
-        // Build attestation with pre-computed hashes and identity status
+        // Build attestation with pre-computed hash and identity status
         let attestation = {
             let mut builder = AttestationBuilder::new(self.agent.clone(), self.host.clone())
-                .with_content_hash(content_hash.clone())
-                .with_evidence_hash(evidence_hash.clone())
+                .with_replay_hash(replay_hash.clone())
                 .with_identity_status(identity_status.clone());
 
             for check in checks {
@@ -347,11 +333,10 @@ impl ResultBuilder {
             builder.build()?
         };
 
-        // Build full result with same pre-computed hashes and identity status
+        // Build full result with same pre-computed hash and identity status
         let full_result = {
             let mut builder = FullResultBuilder::new(self.agent, self.host)
-                .with_content_hash(content_hash)
-                .with_evidence_hash(evidence_hash)
+                .with_replay_hash(replay_hash)
                 .with_identity_status(identity_status);
 
             for policy in policies {
@@ -371,10 +356,10 @@ impl ResultBuilder {
         Ok((attestation, full_result))
     }
 
-    /// Build all three output formats with consistent hashes
+    /// Build all three output formats with consistent hash
     ///
     /// Returns a tuple of (attestation, full_result, assessor_package) where all
-    /// have the same content_hash, evidence_hash, and identity_status.
+    /// have the same replay_hash and identity_status.
     #[cfg(all(
         feature = "attestation",
         feature = "full-results",
@@ -383,8 +368,7 @@ impl ResultBuilder {
     pub fn build_all(
         self,
         policies: Vec<PolicyInput>,
-        content_hash: String,
-        evidence_hash: String,
+        replay_hash: String,
         identity_status: IdentityStatus,
     ) -> Result<(AttestationResult, FullResult, AssessorPackage), ResultError> {
         // Build checks for attestation
@@ -424,8 +408,7 @@ impl ResultBuilder {
         // Build attestation
         let attestation = {
             let mut builder = AttestationBuilder::new(self.agent.clone(), self.host.clone())
-                .with_content_hash(content_hash.clone())
-                .with_evidence_hash(evidence_hash.clone())
+                .with_replay_hash(replay_hash.clone())
                 .with_identity_status(identity_status.clone());
 
             for check in checks {
@@ -439,8 +422,7 @@ impl ResultBuilder {
         // Build full result
         let full_result = {
             let mut builder = FullResultBuilder::new(self.agent.clone(), self.host.clone())
-                .with_content_hash(content_hash.clone())
-                .with_evidence_hash(evidence_hash.clone())
+                .with_replay_hash(replay_hash.clone())
                 .with_identity_status(identity_status.clone());
 
             for policy in policies {
@@ -460,8 +442,7 @@ impl ResultBuilder {
         // Build assessor package
         let assessor_package = {
             let mut builder = AssessorPackageBuilder::new(self.agent, self.host)
-                .with_content_hash(content_hash)
-                .with_evidence_hash(evidence_hash)
+                .with_replay_hash(replay_hash)
                 .with_identity_status(identity_status);
 
             for policy in assessor_inputs {
@@ -802,19 +783,13 @@ mod tests {
         ];
 
         let result = builder
-            .build_attestation(
-                checks,
-                "sha256:content123".to_string(),
-                "sha256:evidence456".to_string(),
-                identity_status,
-            )
+            .build_attestation(checks, "sha256:replay123".to_string(), identity_status)
             .unwrap();
 
         assert_eq!(result.check_count(), 2);
         assert_eq!(result.summary.passed, 1);
         assert_eq!(result.summary.failed, 1);
-        assert_eq!(result.envelope.content_hash, "sha256:content123");
-        assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
+        assert_eq!(result.envelope.replay_hash, "sha256:replay123");
         assert!(result.is_identity_bootstrapped());
     }
 
@@ -837,12 +812,7 @@ mod tests {
         )];
 
         let result = builder
-            .build_attestation(
-                checks,
-                "sha256:content".to_string(),
-                "sha256:evidence".to_string(),
-                identity_status,
-            )
+            .build_attestation(checks, "sha256:replay".to_string(), identity_status)
             .unwrap();
 
         assert!(!result.is_identity_bootstrapped());
@@ -869,18 +839,12 @@ mod tests {
         .with_metadata(metadata)];
 
         let result = builder
-            .build_full_result(
-                policies,
-                "sha256:content123".to_string(),
-                "sha256:evidence456".to_string(),
-                identity_status,
-            )
+            .build_full_result(policies, "sha256:replay123".to_string(), identity_status)
             .unwrap();
 
         assert_eq!(result.policy_count(), 1);
         assert_eq!(result.summary.passed, 1);
-        assert_eq!(result.envelope.content_hash, "sha256:content123");
-        assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
+        assert_eq!(result.envelope.replay_hash, "sha256:replay123");
         assert!(result.is_identity_bootstrapped());
     }
 
@@ -904,25 +868,19 @@ mod tests {
         .with_metadata(metadata)];
 
         let result = builder
-            .build_assessor_package(
-                policies,
-                "sha256:content123".to_string(),
-                "sha256:evidence456".to_string(),
-                identity_status,
-            )
+            .build_assessor_package(policies, "sha256:replay123".to_string(), identity_status)
             .unwrap();
 
         assert_eq!(result.policy_count(), 1);
         assert!(result.all_passed());
-        assert_eq!(result.envelope.content_hash, "sha256:content123");
-        assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
+        assert_eq!(result.envelope.replay_hash, "sha256:replay123");
         assert!(!result.is_identity_bootstrapped());
         assert!(result.envelope.identity_status.is_disabled());
     }
 
     #[cfg(all(feature = "attestation", feature = "full-results"))]
     #[test]
-    fn test_build_both_has_same_hashes_and_identity() {
+    fn test_build_both_has_same_hash_and_identity() {
         let builder = ResultBuilder::from_system("test-agent");
         let identity_status = IdentityStatus::success("scanset://test");
 
@@ -938,22 +896,13 @@ mod tests {
         .with_metadata(metadata)];
 
         let (attestation, full_result) = builder
-            .build_both(
-                policies,
-                "sha256:content123".to_string(),
-                "sha256:evidence456".to_string(),
-                identity_status,
-            )
+            .build_both(policies, "sha256:replay123".to_string(), identity_status)
             .unwrap();
 
-        // CRITICAL: Both must have same hashes
+        // CRITICAL: Both must have same replay hash
         assert_eq!(
-            attestation.envelope.content_hash,
-            full_result.envelope.content_hash
-        );
-        assert_eq!(
-            attestation.envelope.evidence_hash,
-            full_result.envelope.evidence_hash
+            attestation.envelope.replay_hash,
+            full_result.envelope.replay_hash
         );
         // CRITICAL: Both must have same identity status
         assert_eq!(
@@ -972,7 +921,7 @@ mod tests {
         feature = "assessor-evidence"
     ))]
     #[test]
-    fn test_build_all_has_same_hashes_and_identity() {
+    fn test_build_all_has_same_hash_and_identity() {
         let builder = ResultBuilder::from_system("test-agent");
         let identity_status = IdentityStatus::success("scanset://test");
 
@@ -990,30 +939,17 @@ mod tests {
         .with_metadata(metadata)];
 
         let (attestation, full_result, assessor_package) = builder
-            .build_all(
-                policies,
-                "sha256:content123".to_string(),
-                "sha256:evidence456".to_string(),
-                identity_status,
-            )
+            .build_all(policies, "sha256:replay123".to_string(), identity_status)
             .unwrap();
 
-        // CRITICAL: All three must have same hashes
+        // CRITICAL: All three must have same replay hash
         assert_eq!(
-            attestation.envelope.content_hash,
-            full_result.envelope.content_hash
+            attestation.envelope.replay_hash,
+            full_result.envelope.replay_hash
         );
         assert_eq!(
-            attestation.envelope.evidence_hash,
-            full_result.envelope.evidence_hash
-        );
-        assert_eq!(
-            full_result.envelope.content_hash,
-            assessor_package.envelope.content_hash
-        );
-        assert_eq!(
-            full_result.envelope.evidence_hash,
-            assessor_package.envelope.evidence_hash
+            full_result.envelope.replay_hash,
+            assessor_package.envelope.replay_hash
         );
         // CRITICAL: All three must have same identity status
         assert_eq!(

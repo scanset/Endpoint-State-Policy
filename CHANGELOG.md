@@ -1,5 +1,97 @@
 # Changelog with Security Notes
 
+## [1.2.0] — 2026-03-01
+
+### Summary
+
+Replaces the dual-hash system (`content_hash` + `evidence_hash`) with a single **`replay_hash`** computed from a three-layer `ReplayManifest`. This eliminates hash instability caused by volatile evidence fields (timestamps, collection counters, metadata) while providing a stronger integrity guarantee that captures *what was checked*, *how it was executed*, and *what passed or failed* — without including actual collected values.
+
+### Breaking Changes
+
+- **Envelope schema**: `content_hash` and `evidence_hash` fields removed from `ResultEnvelope`. Replaced by single `replay_hash` field.
+- **Signature covers**: `covers` field changes from `["content_hash", "evidence_hash"]` to `["replay_hash"]`.
+- **Signed data**: Signature payload changes from `SHA256(content_hash || evidence_hash)` to `SHA256(replay_hash)`.
+- **Schema version**: Bumped from `1.1.1` to `1.2.0`.
+- Consumers parsing the envelope must handle the new field name. See Migration Guide (Appendix A of schema doc).
+
+### Added
+
+- **`ReplayManifest`** — New canonical manifest type in `canonical_manifest.rs` with three-layer structure per criterion:
+  - **Intent layer**: What was checked (STATE fields, operations, expected values, TEST spec, OBJECT identifiers, record checks).
+  - **Contract layer**: How it was executed (CTN type, collector ID, collection mode, field mappings).
+  - **Outcome layer**: What passed/failed per field (operation, expected value, pass/fail boolean — NO actual collected values).
+- **`ReplayTreeNode`** — Merkle-style CRI tree rollup enum (`Leaf` / `Block`) that mirrors the AND/OR/NOT logical structure, ensuring tree topology affects the hash.
+- **`CriterionReplay`** — Per-criterion replay struct combining intent + contract + outcome with deterministic hash computation.
+- **`replay_hash` field** on `ResultEnvelope`, `ExecutionManifest`, and `PolicyExecutionResult`.
+- **`has_valid_hash()`** method replacing `has_valid_hashes()` on `ExecutionManifest`.
+- **`finalize_hash()`** method replacing `finalize_hashes()` on `ExecutionManifest`.
+- **`set_replay_manifest()`** method replacing `set_content_manifest()` / `set_evidence_manifest()`.
+- **`with_replay_hash()`** builder method on `ResultEnvelope`, `AttestationBuilder`, `FullResultBuilder`, `AssessorPackageBuilder`, and `ResultBuilder`.
+- **`replay_hash_matches()`** method on `ResultEnvelope` replacing `evidence_matches()`.
+- **`build_replay_manifest()`** in execution engine, orchestrating per-criterion replay extraction from the CRI tree result.
+
+### Removed
+
+- **`ContentManifest`** — Previously captured policy identity + criteria structure.
+- **`EvidenceManifest`** — Previously captured collected evidence (source of hash instability).
+- **`CriterionEvidence`** / **`ObjectEvidence`** — Evidence manifest sub-types.
+- **`content_hash`** and **`evidence_hash`** fields from `ResultEnvelope`, `ExecutionManifest`, and `PolicyExecutionResult`.
+- **`has_valid_hashes()`**, **`finalize_hashes()`**, **`set_content_manifest()`**, **`set_evidence_manifest()`** from `ExecutionManifest`.
+- **`with_content_hash()`** and **`with_evidence_hash()`** from all builders.
+- **`evidence_matches()`** from `ResultEnvelope`.
+- **`build_content_manifest()`**, **`build_evidence_manifest()`**, **`compute_criteria_structure_hash()`**, **`tree_to_structure_string()`** from execution engine.
+
+### Changed
+
+- **Execution engine `execute()`**: Now calls `build_replay_manifest()` and computes a single `replay_hash` instead of building two separate manifests.
+- **All output builders** (`AttestationBuilder`, `FullResultBuilder`, `AssessorPackageBuilder`, `ResultBuilder`): Accept single `replay_hash` parameter instead of `content_hash` + `evidence_hash`.
+- **`SignatureBlock::standard_covers()`**: Returns `["replay_hash"]` instead of `["content_hash", "evidence_hash"]`.
+- **`PackageInfo.format_version`**: Bumped to `"1.2.0"`.
+- **`SCHEMA_VERSION` constant**: Changed from `"1.1.0"` to `"1.2.0"`.
+- **Scanner `types/mod.rs`**: Re-exports updated from `ContentManifest`/`EvidenceManifest` to `ReplayManifest`/`CriterionReplay`/`ReplayTreeNode`.
+
+### Design Rationale
+
+The previous dual-hash system was unstable because `EvidenceManifest` included volatile fields — collection timestamps, field counts, duration measurements, and HashMap-ordered data — that changed between runs even when compliance posture was identical. This caused the daemon's dedup tracker to submit full results on every scan cycle, defeating change detection entirely.
+
+The replay hash solves this by hashing only deterministic, compliance-relevant data:
+
+| Layer | Captures | Excludes |
+|-------|----------|----------|
+| Intent | STATE fields, operations, expected values, TEST spec | Runtime resolution metadata |
+| Contract | CTN type, collector, collection mode, field mappings | Timing, ordering |
+| Outcome | Pass/fail per field with operation + expected | **Actual collected values** |
+
+Excluding actual values is critical: a sysctl parameter reading `1` today and `1` tomorrow should produce the same hash if both pass the `equals "1"` check. The replay hash proves the verification was performed correctly and produced the same result, without revealing or depending on the evidence data.
+
+The Merkle-style tree rollup ensures that logical structure matters: `AND(A, B)` produces a different hash than `OR(A, B)` even with identical child criteria, and negation (`NOT`) is included in the hash input.
+
+### Files Modified
+
+| File | Crate | Changes |
+|------|-------|---------|
+| `canonical_manifest.rs` | scanner | Complete rewrite — `ReplayManifest` replaces `ContentManifest` + `EvidenceManifest` |
+| `engine.rs` | scanner | `build_replay_manifest()` replaces `build_content_manifest()` + `build_evidence_manifest()` |
+| `manifest.rs` | scanner | `ExecutionManifest` uses `replay_manifest` + `replay_hash` |
+| `types/mod.rs` | scanner | Updated re-exports |
+| `envelope.rs` | common | `replay_hash` replaces `content_hash` + `evidence_hash`; schema version `1.2.0` |
+| `builder.rs` | common | All `build_*()` methods take single `replay_hash` |
+| `attestation.rs` | common | `AttestationBuilder` uses `with_replay_hash()` |
+| `full.rs` | common | `FullResultBuilder` uses `with_replay_hash()` |
+| `assessor.rs` | common | `AssessorPackageBuilder` uses `with_replay_hash()` |
+
+### Pending (Daemon Layer)
+
+| File | Changes Needed |
+|------|----------------|
+| `dedup.rs` | Doc comments + tracing labels (`evidence_hash` → `replay_hash`) |
+| `main.rs` | `package.envelope.evidence_hash` → `package.envelope.replay_hash` |
+| `output/mod.rs` | `combine_scan_hashes()` → single replay hash |
+| `output/signing.rs` | `compute_signed_data()` takes single hash |
+| `output/assessor.rs` | Builder call updated for single hash |
+| `ScanResult` struct | `content_hash` + `evidence_hash` → `replay_hash` |
+| `console.rs` | No changes needed |
+
 ## [1.1.0] - 2026-01-24
 
 ### Added

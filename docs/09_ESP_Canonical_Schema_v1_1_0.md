@@ -1,8 +1,8 @@
-# ESP v1.1.1 — Canonical Execution Schema
+# ESP v1.2.0 — Canonical Execution Schema
 
-**Version:** 1.1.1
+**Version:** 1.2.0
 **Status:** Normative
-**Last Updated:** 2026-01-25
+**Last Updated:** 2026-03-01
 
 ---
 
@@ -37,7 +37,8 @@ ScanResult (per policy)
 |-----------|-------------|
 | **Single Envelope** | All policies in one result, regardless of input count |
 | **Complete** | Contains all execution data needed for each output mode |
-| **Verifiable** | Evidence hash enables attestation/full result correlation |
+| **Verifiable** | Replay hash enables attestation/full result correlation |
+| **Stable** | Same compliance posture produces same hash across runs |
 | **Serializable** | JSON format for interoperability |
 | **Signable** | Cryptographic signatures bind results to agent identity |
 | **Transparent** | Certificate issuance logged to append-only transparency log |
@@ -52,6 +53,28 @@ ScanResult (per policy)
 | `assessor` | Full | Yes | Full | Yes | Yes | Yes |
 
 **Note:** `assessor` is the default output format as of v1.1.0.
+
+### 2.4 Replay Hash Architecture (v1.2.0)
+
+The `replay_hash` replaces the previous `content_hash` + `evidence_hash` dual-hash system. It is computed from a three-layer `ReplayManifest` that captures intent, contract, and outcome per criterion, rolled up through the CRI tree using a Merkle-style structure.
+
+```
+ReplayManifest
+├── policy_id, platform, criticality
+├── CriterionReplay[] (one per CTN)
+│   ├── Intent:   what was checked (fields, operations, expected values)
+│   ├── Contract: how it was executed (collector, mode, mappings)
+│   └── Outcome:  what passed/failed (per-field pass/fail, NO actual values)
+└── ReplayTreeNode (CRI tree rollup)
+    ├── Leaf { ctn_node_id } → criterion hash
+    └── Block { AND/OR, negate, children } → combined hash
+```
+
+**Properties:**
+- **Deterministic:** BTreeMap for sorted keys, canonical JSON serialization
+- **Stable:** Same policy + same compliance posture = same hash, regardless of actual collected values
+- **Tree-aware:** AND vs OR with same children produces different hashes; negation changes hash
+- **Privacy-preserving:** Proves verification was performed correctly without revealing evidence data
 
 ---
 
@@ -70,8 +93,7 @@ All output formats share a common envelope structure:
     "host": {},
     "started_at": "string",
     "completed_at": "string",
-    "content_hash": "string",
-    "evidence_hash": "string",
+    "replay_hash": "string",
     "signature": {},
     "identity_status": {}
   },
@@ -90,8 +112,7 @@ All output formats share a common envelope structure:
 | `host` | object | Yes | Host information |
 | `started_at` | string | Yes | ISO 8601 timestamp when scan started |
 | `completed_at` | string | Yes | ISO 8601 timestamp when scan completed |
-| `content_hash` | string | Yes | SHA-256 hash of result content |
-| `evidence_hash` | string | Yes | SHA-256 hash of all collected evidence |
+| `replay_hash` | string | Yes | SHA-256 replay hash (intent + contract + outcome, see Section 2.4) |
 | `signature` | object | No | Cryptographic signature (see Section 3.5) |
 | `identity_status` | object | Yes | Identity bootstrap status (see Section 3.6) |
 
@@ -101,7 +122,7 @@ All output formats share a common envelope structure:
 {
   "id": "esp-agent",
   "name": "esp-agent",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "agent_type": "cli"
 }
 ```
@@ -133,7 +154,7 @@ All output formats share a common envelope structure:
 
 ### 3.5 Signature Block
 
-The signature block provides cryptographic proof of result integrity and agent identity. When present, it contains a digital signature over the envelope's `content_hash` and `evidence_hash` fields, along with the certificate chain and transparency proof for PKI verification.
+The signature block provides cryptographic proof of result integrity and agent identity. When present, it contains a digital signature over the envelope's `replay_hash` field, along with the certificate chain and transparency proof for PKI verification.
 
 #### 3.5.1 Structure
 
@@ -147,7 +168,7 @@ The signature block provides cryptographic proof of result integrity and agent i
   "payload": "BASE64_ENCODED_PAYLOAD",
   "key_id": "pki:cert:1234567890abcdef",
   "signed_at": "2026-01-10T15:30:00Z",
-  "covers": ["content_hash", "evidence_hash"],
+  "covers": ["replay_hash"],
   "certificate_chain": [
     "-----BEGIN CERTIFICATE-----\n<workload-cert>\n-----END CERTIFICATE-----",
     "-----BEGIN CERTIFICATE-----\n<workload-ca>\n-----END CERTIFICATE-----",
@@ -228,33 +249,32 @@ The `key_id` format depends on the identity source:
 
 #### 3.5.6 Signed Data and Payload
 
-The signature covers the concatenation of `content_hash` and `evidence_hash`:
+The signature covers the `replay_hash`:
 
 ```
-signed_data = SHA256(content_hash || evidence_hash)
+signed_data = SHA256(replay_hash)
 ```
 
-Where `||` denotes string concatenation. For example:
+For example:
 
 ```
-content_hash  = "sha256:8726504ca47412e0d8c0be36a1286a79..."
-evidence_hash = "sha256:9fbea98350c00a9642fe91431619dd3a..."
-signed_data   = SHA256("sha256:8726504ca47412e0d8c0be36a1286a79...sha256:9fbea98350c00a9642fe91431619dd3a...")
+replay_hash = "sha256:7a3f1e9b4c2d8056..."
+signed_data = SHA256("sha256:7a3f1e9b4c2d8056...")
 ```
 
-**Payload Field (v1.1.1+):**
+**Payload Field:**
 
 The `payload` field contains the Base64-encoded `signed_data` (the 32-byte SHA-256 hash). This field is included to simplify verification by providing the exact bytes that were signed, eliminating the need for verifiers to reconstruct the payload from the envelope fields.
 
 ```
 payload = Base64(signed_data)
-        = Base64(SHA256(content_hash || evidence_hash))
+        = Base64(SHA256(replay_hash))
 ```
 
 **Important:** The ECDSA signature is computed as `ECDSA_Sign(SHA256(signed_data))` because the OpenSSL signing API hashes the input before signing. This means the actual cryptographic operation is:
 
 ```
-signature = ECDSA_Sign(SHA256(SHA256(content_hash || evidence_hash)))
+signature = ECDSA_Sign(SHA256(SHA256(replay_hash)))
 ```
 
 When verifying:
@@ -348,7 +368,7 @@ To fully verify a signed result with PKI identity:
 1. PARSE signature block
    - Decode public_key from Base64
    - Decode signature from Base64
-   - Decode payload from Base64 (v1.1.1+)
+   - Decode payload from Base64
    - Parse certificate_chain PEM certificates
 
 2. VERIFY certificate chain
@@ -368,9 +388,9 @@ To fully verify a signed result with PKI identity:
    - If mismatch: REJECT
 
 5. VERIFY cryptographic signature
-   - If payload field present (v1.1.1+):
+   - If payload field present (v1.2.0+):
      - Use decoded payload directly as verification input
-   - If payload field absent (v1.1.0):
+   - If payload field absent (v1.1.x fallback):
      - Reconstruct: signed_data = SHA256(envelope.content_hash || envelope.evidence_hash)
    - ECDSA_Verify(payload, signature, public_key)
    - If invalid: REJECT
@@ -908,8 +928,8 @@ The assessor package extends the full result with reproducibility information:
 
 ```json
 {
-  "format_version": "1.1.1",
-  "generated_at": "2026-01-23T22:15:06Z",
+  "format_version": "1.2.0",
+  "generated_at": "2026-03-01T12:00:00Z",
   "purpose": "Compliance assessment verification",
   "contains_cui": true,
   "distribution": "Internal use only - contains CUI",
@@ -937,7 +957,7 @@ The assessor package extends the full result with reproducibility information:
   "agent": {
     "id": "esp-agent",
     "name": "esp-agent",
-    "version": "1.1.1"
+    "version": "1.2.0"
   },
   "summary": {
     "total_policies": 3,
@@ -969,11 +989,11 @@ The assessor package extends the full result with reproducibility information:
 {
   "envelope": {
     "result_id": "esp-result-18892f9d95dcc6b5",
-    "schema_version": "1.1.1",
+    "schema_version": "1.2.0",
     "agent": {
       "id": "esp-agent",
       "name": "esp-agent",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "agent_type": "cli"
     },
     "host": {
@@ -982,10 +1002,9 @@ The assessor package extends the full result with reproducibility information:
       "os": "linux",
       "arch": "x86_64"
     },
-    "started_at": "2026-01-23T22:11:22Z",
-    "completed_at": "2026-01-23T22:11:22Z",
-    "content_hash": "sha256:8726504ca47412e0d8c0be36a1286a79...",
-    "evidence_hash": "sha256:9fbea98350c00a9642fe91431619dd3a...",
+    "started_at": "2026-03-01T12:00:00Z",
+    "completed_at": "2026-03-01T12:00:01Z",
+    "replay_hash": "sha256:7a3f1e9b4c2d80563ef1a28b9d4c7e5f1234567890abcdef...",
     "signature": {
       "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
       "signer_type": "agent",
@@ -994,8 +1013,8 @@ The assessor package extends the full result with reproducibility information:
       "signature": "MEUCIQC...",
       "payload": "8JoFLGh3x2kQY5n...",
       "key_id": "pki:cert:1234567890abcdef",
-      "signed_at": "2026-01-23T22:11:22Z",
-      "covers": ["content_hash", "evidence_hash"],
+      "signed_at": "2026-03-01T12:00:01Z",
+      "covers": ["replay_hash"],
       "certificate_chain": [
         "-----BEGIN CERTIFICATE-----\n<workload-cert>\n-----END CERTIFICATE-----",
         "-----BEGIN CERTIFICATE-----\n<workload-ca>\n-----END CERTIFICATE-----",
@@ -1050,126 +1069,7 @@ The assessor package extends the full result with reproducibility information:
 }
 ```
 
-### 12.3 Full Result Format
-
-```json
-{
-  "envelope": {
-    "result_id": "esp-result-18892f9d95dcc6b5",
-    "schema_version": "1.1.1",
-    "agent": {
-      "id": "esp-agent",
-      "name": "esp-agent",
-      "version": "1.1.1",
-      "agent_type": "cli"
-    },
-    "host": {
-      "id": "host-ad1bfa7a1863edb2",
-      "hostname": "server01",
-      "os": "linux",
-      "arch": "x86_64"
-    },
-    "started_at": "2026-01-23T22:11:22Z",
-    "completed_at": "2026-01-23T22:11:22Z",
-    "content_hash": "sha256:8726504ca47412e0d8c0be36a1286a79...",
-    "evidence_hash": "sha256:9fbea98350c00a9642fe91431619dd3a...",
-    "signature": {
-      "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
-      "signer_type": "agent",
-      "algorithm": "ecdsa-p256",
-      "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...",
-      "signature": "MEUCIQC...",
-      "payload": "8JoFLGh3x2kQY5n...",
-      "key_id": "pki:cert:1234567890abcdef",
-      "signed_at": "2026-01-23T22:11:22Z",
-      "covers": ["content_hash", "evidence_hash"],
-      "certificate_chain": [
-        "-----BEGIN CERTIFICATE-----\n<workload-cert>\n-----END CERTIFICATE-----",
-        "-----BEGIN CERTIFICATE-----\n<workload-ca>\n-----END CERTIFICATE-----",
-        "-----BEGIN CERTIFICATE-----\n<ia-cert>\n-----END CERTIFICATE-----"
-      ],
-      "transparency": {
-        "log_index": 47,
-        "inclusion_proof": {
-          "tree_size": 100,
-          "root_hash": "f6e5d4c3b2a1...",
-          "hashes": ["abc123...", "def456..."]
-        }
-      }
-    },
-    "identity_status": {
-      "bootstrapped": true,
-      "signer_id": "scanset://prod/aws/account/123456789012/workload/esp-agent",
-      "error": null,
-      "error_code": null
-    }
-  },
-  "summary": {
-    "total_policies": 3,
-    "passed": 1,
-    "failed": 2,
-    "errors": 0,
-    "by_criticality": {
-      "critical": { "total": 0, "passed": 0, "failed": 0 },
-      "high": { "total": 1, "passed": 1, "failed": 0 },
-      "medium": { "total": 2, "passed": 0, "failed": 2 },
-      "low": { "total": 0, "passed": 0, "failed": 0 },
-      "info": { "total": 0, "passed": 0, "failed": 0 }
-    },
-    "total_weight": 1.8,
-    "passed_weight": 0.8,
-    "posture_score": 0.44444448
-  },
-  "policies": [
-    {
-      "identity": {
-        "policy_id": "test-file-metadata-001",
-        "platform": "linux",
-        "criticality": "high",
-        "control_mappings": [
-          { "framework": "CIS", "control_id": "6.1.1" },
-          { "framework": "CIS", "control_id": "6.1.2" },
-          { "framework": "NIST-800-53", "control_id": "AC-6" }
-        ]
-      },
-      "outcome": "pass",
-      "weight": 0.8,
-      "findings": [],
-      "evidence": {
-        "data": {
-          "file_metadata_passwd_file": {
-            "exists": true,
-            "file_group": "0",
-            "file_mode": "0644",
-            "file_owner": "0",
-            "file_size": 839,
-            "readable": true
-          }
-        },
-        "collection_metadata": [
-          {
-            "object_id": "passwd_file",
-            "ctn_type": "file_metadata",
-            "collector_id": "filesystem_collector",
-            "collection_mode": "default",
-            "duration_ms": 0,
-            "field_count": 6,
-            "has_warnings": false,
-            "method": {
-              "method_type": "file_stat",
-              "description": "Query file metadata via stat()",
-              "target": "/etc/passwd"
-            }
-          }
-        ],
-        "collected_at": "2026-01-23T22:11:22Z"
-      }
-    }
-  ]
-}
-```
-
-### 12.4 Unsigned Result Example
+### 12.3 Unsigned Result Example
 
 When identity bootstrap fails, results are produced without a signature:
 
@@ -1177,11 +1077,11 @@ When identity bootstrap fails, results are produced without a signature:
 {
   "envelope": {
     "result_id": "esp-result-18892f9d95dcc6b5",
-    "schema_version": "1.1.1",
+    "schema_version": "1.2.0",
     "agent": {
       "id": "esp-agent",
       "name": "esp-agent",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "agent_type": "cli"
     },
     "host": {
@@ -1190,10 +1090,9 @@ When identity bootstrap fails, results are produced without a signature:
       "os": "linux",
       "arch": "x86_64"
     },
-    "started_at": "2026-01-23T22:11:22Z",
-    "completed_at": "2026-01-23T22:11:22Z",
-    "content_hash": "sha256:8726504ca47412e0d8c0be36a1286a79...",
-    "evidence_hash": "sha256:9fbea98350c00a9642fe91431619dd3a...",
+    "started_at": "2026-03-01T12:00:00Z",
+    "completed_at": "2026-03-01T12:00:01Z",
+    "replay_hash": "sha256:7a3f1e9b4c2d80563ef1a28b9d4c7e5f1234567890abcdef...",
     "signature": null,
     "identity_status": {
       "bootstrapped": false,
@@ -1202,8 +1101,8 @@ When identity bootstrap fails, results are produced without a signature:
       "error_code": "BOOTSTRAP_CONNECTION_FAILED"
     }
   },
-  "summary": { ... },
-  "policies": [ ... ]
+  "summary": { "..." : "..." },
+  "policies": [ "..." ]
 }
 ```
 
@@ -1226,6 +1125,7 @@ MAJOR.MINOR.PATCH
 | Breaking field removal | MAJOR | Remove `envelope` |
 | Breaking type change | MAJOR | `policy_id` integer → string |
 | New required field | MAJOR | Add required `signature` |
+| Field replacement | MINOR | `content_hash` + `evidence_hash` → `replay_hash` |
 | New optional field | MINOR | Add optional `transparency` |
 | Documentation only | PATCH | Clarify description |
 
@@ -1243,10 +1143,17 @@ MAJOR.MINOR.PATCH
 |       |            | Changed default output format to `assessor` |
 |       |            | Added unsigned result example (Section 12.4) |
 |       |            | Deprecated TPM and software-only signing modes |
-| 1.1.1 | 2026-01-25 | **Current version** |
-|       |            | Added `payload` field to SignatureBlock (Section 3.5.6) |
+| 1.1.1 | 2026-01-25 | Added `payload` field to SignatureBlock (Section 3.5.6) |
 |       |            | Updated verification procedure to use payload (Section 3.5.10) |
 |       |            | Clarified ECDSA double-hashing behavior |
+| 1.2.0 | 2026-03-01 | **Current version** |
+|       |            | Replaced `content_hash` + `evidence_hash` with single `replay_hash` (Section 3.2) |
+|       |            | Added Replay Hash Architecture (Section 2.4) |
+|       |            | Signature now covers `replay_hash` only; `covers` field updated (Section 3.5) |
+|       |            | Signed data changed to `SHA256(replay_hash)` (Section 3.5.6) |
+|       |            | Updated verification procedure for v1.2.0 payload (Section 3.5.10) |
+|       |            | Updated all output format examples (Section 12) |
+|       |            | Package `format_version` bumped to `1.2.0` (Section 11.3) |
 
 ### 13.4 Version Validation
 
@@ -1258,22 +1165,25 @@ if !version.starts_with("1.") {
     return Err("Unsupported schema version");
 }
 
-// For v1.1.0+ features
-let minor: u32 = version.split('.').nth(1)
-    .and_then(|s| s.parse().ok())
-    .unwrap_or(0);
+let parts: Vec<u32> = version.split('.')
+    .filter_map(|s| s.parse().ok())
+    .collect();
+let minor = parts.get(1).copied().unwrap_or(0);
+let patch = parts.get(2).copied().unwrap_or(0);
 
-if minor >= 1 {
-    // Can use transparency and identity_status fields
+// v1.2.0+: use replay_hash
+if minor >= 2 {
+    // envelope.replay_hash is the integrity hash
+    // signature.covers = ["replay_hash"]
+    // signed_data = SHA256(replay_hash)
 }
 
-// For v1.1.1+ features (payload field)
-let patch: u32 = version.split('.').nth(2)
-    .and_then(|s| s.parse().ok())
-    .unwrap_or(0);
-
-if minor >= 1 && patch >= 1 {
-    // Can use payload field directly for verification
+// v1.1.x: legacy dual-hash
+if minor == 1 {
+    // envelope.content_hash + envelope.evidence_hash
+    // signature.covers = ["content_hash", "evidence_hash"]
+    // signed_data = SHA256(content_hash || evidence_hash)
+    // payload field available if patch >= 1
 }
 ```
 
@@ -1287,6 +1197,7 @@ if minor >= 1 && patch >= 1 {
 |-------|------------|
 | `envelope.schema_version` | Valid SemVer |
 | `envelope.result_id` | Non-empty, starts with `esp-result-` |
+| `envelope.replay_hash` | Non-empty, starts with `sha256:` (v1.2.0+) |
 | `envelope.identity_status` | Required object (v1.1.0+) |
 | `identity.policy_id` | Non-empty string |
 | `identity.platform` | Known platform value |
@@ -1300,19 +1211,19 @@ if minor >= 1 && patch >= 1 {
 | Summary counts | `total_policies == passed + failed + errors` |
 | Criticality breakdown | `total_policies == sum(by_criticality[*].total)` |
 | Posture score | `posture_score == passed_weight / total_weight` |
-| Evidence hash | Matches hash of all evidence data |
+| Replay hash | Stable across runs with same compliance posture |
 | Identity consistency | `envelope.signature.signer_id == envelope.identity_status.signer_id` (when signed) |
 
 ### 14.3 Signature Validation
 
 | Rule | Validation |
 |------|------------|
-| Covers field | Must contain `["content_hash", "evidence_hash"]` |
+| Covers field | Must contain `["replay_hash"]` (v1.2.0+) |
 | Algorithm | Must be known algorithm value |
 | Public key | Must be valid Base64, must match certificate |
 | Signature | Must be valid Base64 |
-| Payload (v1.1.1+) | Must be valid Base64, 32 bytes when decoded |
-| Signed data | If payload absent: `SHA256(content_hash \|\| evidence_hash)` must verify |
+| Payload | Must be valid Base64, 32 bytes when decoded |
+| Signed data | `SHA256(replay_hash)` must verify against signature |
 | Certificate chain | Must form valid chain to trusted Root CA |
 | Signer ID match | SAN URI from certificate must match `signer_id` |
 
@@ -1352,6 +1263,7 @@ if minor >= 1 && patch >= 1 {
 | `InvalidTransparencyProof` | Merkle proof verification failed |
 | `InvalidIdentityStatus` | Identity status fields inconsistent |
 | `InvalidPayload` | Payload not valid Base64 or wrong length |
+| `InvalidReplayHash` | Replay hash missing or malformed |
 
 ---
 
@@ -1379,42 +1291,76 @@ if minor >= 1 && patch >= 1 {
 
 ---
 
-## Appendix A: Migration Guide (v1.1.0 to v1.1.1)
+## Appendix A: Migration Guide (v1.1.x to v1.2.0)
 
 ### A.1 Breaking Changes
 
-None. v1.1.1 is backward compatible with v1.1.0.
+| Change | v1.1.x | v1.2.0 |
+|--------|--------|--------|
+| Hash fields | `content_hash` + `evidence_hash` | `replay_hash` |
+| Signature covers | `["content_hash", "evidence_hash"]` | `["replay_hash"]` |
+| Signed data | `SHA256(content_hash \|\| evidence_hash)` | `SHA256(replay_hash)` |
+| Schema version | `1.1.1` | `1.2.0` |
+| Package format_version | `1.1.1` | `1.2.0` |
 
-### A.2 New Optional Fields
+### A.2 Consumer Migration
 
-| Field | Location | When Present |
-|-------|----------|--------------|
-| `payload` | `signature` | PKI-signed results (v1.1.1+) |
-
-### A.3 Verification with Payload Field
-
-When the `payload` field is present, verifiers can use it directly:
+Consumers MUST check `schema_version` and handle both formats:
 
 ```rust
-// v1.1.1+ verification (preferred)
-if let Some(payload) = &signature.payload {
-    let payload_bytes = base64_decode(payload)?;
-    ecdsa_verify(&payload_bytes, &signature.signature, &public_key)?;
+if schema_version >= "1.2.0" {
+    // Use envelope.replay_hash
+    let hash = &envelope.replay_hash;
+    // Signature covers ["replay_hash"]
+    // Verify: signed_data = SHA256(replay_hash)
 } else {
-    // v1.1.0 fallback: reconstruct payload
-    let signed_data = sha256(format!("{}{}", content_hash, evidence_hash));
-    ecdsa_verify(&signed_data, &signature.signature, &public_key)?;
+    // Legacy: use envelope.content_hash + envelope.evidence_hash
+    let content = &envelope.content_hash;
+    let evidence = &envelope.evidence_hash;
+    // Signature covers ["content_hash", "evidence_hash"]
+    // Verify: signed_data = SHA256(content_hash || evidence_hash)
 }
 ```
 
-### A.4 Backward Compatibility
+### A.3 Verifier Migration
 
-Verifiers SHOULD:
-1. Check for `payload` field presence
-2. If present, use it directly for verification
-3. If absent, reconstruct the payload from `content_hash` and `evidence_hash`
+When verifying signatures across schema versions:
 
-This ensures compatibility with both v1.1.0 and v1.1.1 signed results.
+```rust
+// Determine signed data based on schema version
+let signed_data = if let Some(payload) = &signature.payload {
+    // Preferred: use payload directly (v1.1.1+)
+    base64_decode(payload)?
+} else if schema_version >= "1.2.0" {
+    // v1.2.0 without payload (should not occur, but handle defensively)
+    sha256(replay_hash)
+} else {
+    // v1.1.0 fallback
+    sha256(format!("{}{}", content_hash, evidence_hash))
+};
+
+ecdsa_verify(&signed_data, &signature.signature, &public_key)?;
+```
+
+### A.4 Daemon Dedup Migration
+
+The daemon's dedup tracker previously cached `evidence_hash`. As of v1.2.0, it caches `replay_hash` instead. The `replay_hash` is stable across runs when compliance posture is unchanged, which was the original design intent that `evidence_hash` failed to achieve due to volatile collection metadata.
+
+### A.5 Database Migration
+
+If storing scan results in a database:
+
+```sql
+-- Add new column
+ALTER TABLE scan_results ADD COLUMN replay_hash TEXT;
+
+-- For new v1.2.0 results, replay_hash is populated
+-- For legacy results, content_hash + evidence_hash remain
+
+-- Optional: drop old columns after migration period
+-- ALTER TABLE scan_results DROP COLUMN content_hash;
+-- ALTER TABLE scan_results DROP COLUMN evidence_hash;
+```
 
 ---
 
@@ -1459,6 +1405,7 @@ When processing v1.0.x results that lack `identity_status`:
 | Software-only signing | Deprecated | PKI signing |
 | `tpm:sha256:*` signer_id format | Deprecated | PKI SAN URI format |
 | `software:sha256:*` signer_id format | Deprecated | PKI SAN URI format |
+| `content_hash` + `evidence_hash` | Deprecated (v1.2.0) | `replay_hash` |
 
 ---
 
@@ -1490,10 +1437,10 @@ The ESP agent integrates with a Trust System that provides:
 ### C.3 Signing Flow
 
 ```
-1. Complete ESP scan → ScanResult with content_hash, evidence_hash
-2. Compute signed_data = SHA256(content_hash || evidence_hash)
+1. Complete ESP scan → ScanResult with replay_hash
+2. Compute signed_data = SHA256(replay_hash)
 3. Sign with workload private key: signature = ECDSA_Sign(SHA256(signed_data))
-4. Base64-encode signed_data as payload field (v1.1.1+)
+4. Base64-encode signed_data as payload field
 5. Attach certificate_chain and transparency proof
 6. Output signed result
 ```
@@ -1508,6 +1455,8 @@ The ESP agent integrates with a Trust System that provides:
 5. Verify public key matches certificate
 6. If payload field present:
    - Use payload directly for ECDSA verification
+   Else if schema_version >= 1.2.0:
+   - Reconstruct: signed_data = SHA256(replay_hash)
    Else:
    - Reconstruct: signed_data = SHA256(content_hash || evidence_hash)
 7. ECDSA_Verify(payload, signature, public_key)

@@ -7,34 +7,35 @@
 //!
 //! ```text
 //! ExecutionEngine::execute()
-//!     └── ExecutionManifest (raw, complete, with canonical hashes)
+//!     └── ExecutionManifest (raw, complete, with replay hash)
 //!             ├── Policy identity (id, platform, criticality, mappings)
 //!             ├── Policy metadata (version, title, description, author, tags, extended)
 //!             ├── Tree result (logical structure with pass/fail)
 //!             ├── Collected data (with CollectionMethod)
 //!             ├── Findings (validation failures)
-//!             ├── ContentManifest → content_hash (computed ONCE)
-//!             └── EvidenceManifest → evidence_hash (computed ONCE)
+//!             └── ReplayManifest → replay_hash (computed ONCE)
 //!
-//!             ↓ Output builders USE these hashes, never recompute ↓
+//!             ↓ Output builders USE this hash, never recompute ↓
 //!
 //! ResultBuilder::from_manifest(manifest)
-//!     ├── .build_attestation()      → uses manifest.content_hash, manifest.evidence_hash
-//!     ├── .build_full_results()     → uses manifest.content_hash, manifest.evidence_hash
-//!     └── .build_assessor_results() → uses manifest.content_hash, manifest.evidence_hash
+//!     ├── .build_attestation()      → uses manifest.replay_hash
+//!     ├── .build_full_results()     → uses manifest.replay_hash
+//!     └── .build_assessor_results() → uses manifest.replay_hash
 //! ```
 //!
-//! ## Hash Consistency
+//! ## Replay Hash
 //!
-//! The `content_hash` and `evidence_hash` are computed ONCE during execution
-//! and included in all output formats. This ensures:
+//! The `replay_hash` is computed ONCE during execution and included in all
+//! output formats. It captures intent + contract + outcome in a three-layer
+//! structure, rolled up through the CRI tree. This ensures:
 //!
 //! - Attestations can be verified against full results
 //! - Assessor packages can be linked to attestations
 //! - SIEM/SOAR can trust attestation hashes
+//! - Hash is stable when compliance posture is unchanged
 
 use crate::strategies::{CollectedData, CtnExecutionResult};
-use crate::types::canonical_manifest::{ContentManifest, EvidenceManifest};
+use crate::types::canonical_manifest::ReplayManifest;
 use crate::types::common::LogicalOp;
 use crate::types::criterion::CtnNodeId;
 use common::results::{ComplianceFinding, ControlMapping, CriteriaCounts, Criticality, Outcome};
@@ -195,18 +196,18 @@ pub fn is_known_meta_field(field_name: &str) -> bool {
 /// It contains everything needed to build attestations, full results,
 /// or assessor-ready results.
 ///
-/// ## Canonical Hashes
+/// ## Replay Hash
 ///
-/// The `content_hash` and `evidence_hash` fields are computed ONCE during
-/// execution and must be used by all output builders. This ensures hash
-/// consistency across all output formats.
+/// The `replay_hash` field is computed ONCE during execution and must be
+/// used by all output builders. It captures intent + contract + outcome
+/// rolled up through the CRI tree, ensuring hash consistency across all
+/// output formats.
 ///
 /// ```rust,ignore
-/// // In output builders - USE the hashes, don't recompute!
+/// // In output builders - USE the hash, don't recompute!
 /// fn build_attestation(manifest: &ExecutionManifest) -> Attestation {
 ///     Attestation {
-///         content_hash: manifest.content_hash.clone(),   // USE
-///         evidence_hash: manifest.evidence_hash.clone(), // USE
+///         replay_hash: manifest.replay_hash.clone(), // USE
 ///         // ...
 ///     }
 /// }
@@ -276,31 +277,23 @@ pub struct ExecutionManifest {
     pub findings: Vec<ComplianceFinding>,
 
     // ========================================================================
-    // Canonical Manifests & Hashes
+    // Replay Manifest & Hash
     // ========================================================================
-    /// Canonical content manifest (what was evaluated)
+    /// Canonical replay manifest (intent + contract + outcome per criterion)
     ///
-    /// This is the deterministic representation of the policy evaluation context.
-    /// Used to compute `content_hash`.
-    pub content_manifest: ContentManifest,
+    /// Three-layer deterministic structure capturing what was checked, how it
+    /// was executed, and what passed/failed. Does NOT contain actual collected
+    /// values (those are volatile). Used to compute `replay_hash`.
+    pub replay_manifest: ReplayManifest,
 
-    /// Canonical evidence manifest (what was observed)
+    /// SHA-256 replay hash
     ///
-    /// This is the deterministic representation of collected evidence.
-    /// Used to compute `evidence_hash`.
-    pub evidence_manifest: EvidenceManifest,
-
-    /// SHA-256 hash of the content manifest
+    /// Computed ONCE during execution from the replay manifest. All output
+    /// formats MUST use this value directly - never recompute.
     ///
-    /// Computed ONCE during execution. All output formats MUST use this
-    /// value directly - never recompute.
-    pub content_hash: String,
-
-    /// SHA-256 hash of the evidence manifest
-    ///
-    /// Computed ONCE during execution. All output formats MUST use this
-    /// value directly - never recompute.
-    pub evidence_hash: String,
+    /// Stable across runs when compliance posture is unchanged. Replaces
+    /// the previous `content_hash` + `evidence_hash`.
+    pub replay_hash: String,
 
     // ========================================================================
     // Execution Metadata
@@ -315,8 +308,8 @@ pub struct ExecutionManifest {
 impl ExecutionManifest {
     /// Create a new execution manifest
     ///
-    /// Note: This creates a manifest with empty hashes. Call `finalize_hashes()`
-    /// after populating the manifests, or let `ExecutionEngine::execute()` handle it.
+    /// Note: This creates a manifest with an empty replay hash.
+    /// Let `ExecutionEngine::execute()` handle hash computation.
     pub fn new(
         policy_id: impl Into<String>,
         platform: impl Into<String>,
@@ -336,10 +329,8 @@ impl ExecutionManifest {
             tree_passed: false,
             collected_data: HashMap::new(),
             findings: Vec::new(),
-            content_manifest: ContentManifest::new(&policy_id_str, &platform_str),
-            evidence_manifest: EvidenceManifest::new(),
-            content_hash: String::new(),
-            evidence_hash: String::new(),
+            replay_manifest: ReplayManifest::new(&policy_id_str, &platform_str, "medium"),
+            replay_hash: String::new(),
             executed_at: current_timestamp(),
             execution_duration_ms: 0,
         }
@@ -392,32 +383,25 @@ impl ExecutionManifest {
         self.tree_result.collect_ctn_results()
     }
 
-    /// Check if canonical hashes have been computed
+    /// Check if replay hash has been computed
     ///
-    /// Returns false if hashes are empty (manifest not finalized)
-    pub fn has_valid_hashes(&self) -> bool {
-        !self.content_hash.is_empty() && !self.evidence_hash.is_empty()
+    /// Returns false if hash is empty (manifest not finalized)
+    pub fn has_valid_hash(&self) -> bool {
+        !self.replay_hash.is_empty()
     }
 
-    /// Compute and set the canonical hashes from the manifests
+    /// Compute and set the replay hash from the manifest
     ///
     /// This should be called exactly ONCE after all data is collected.
     /// Typically called by `ExecutionEngine::execute()` before returning.
-    pub fn finalize_hashes(&mut self) {
-        self.content_hash = self.content_manifest.compute_hash();
-        self.evidence_hash = self.evidence_manifest.compute_hash();
+    pub fn finalize_hash(&mut self) {
+        self.replay_hash = self.replay_manifest.compute_replay_hash();
     }
 
-    /// Set the content manifest and update hash
-    pub fn set_content_manifest(&mut self, manifest: ContentManifest) {
-        self.content_manifest = manifest;
-        self.content_hash = self.content_manifest.compute_hash();
-    }
-
-    /// Set the evidence manifest and update hash
-    pub fn set_evidence_manifest(&mut self, manifest: EvidenceManifest) {
-        self.evidence_manifest = manifest;
-        self.evidence_hash = self.evidence_manifest.compute_hash();
+    /// Set the replay manifest and update hash
+    pub fn set_replay_manifest(&mut self, manifest: ReplayManifest) {
+        self.replay_manifest = manifest;
+        self.replay_hash = self.replay_manifest.compute_replay_hash();
     }
 
     /// Check if metadata has any content
@@ -806,8 +790,8 @@ mod tests {
         assert_eq!(manifest.criticality, Criticality::High);
         assert!(!manifest.is_pass());
         assert_eq!(manifest.collected_object_count(), 0);
-        assert!(!manifest.has_valid_hashes()); // Hashes not computed yet
-        assert!(!manifest.has_metadata()); // No metadata yet
+        assert!(!manifest.has_valid_hash());
+        assert!(!manifest.has_metadata());
     }
 
     #[test]
@@ -839,16 +823,15 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_manifest_finalize_hashes() {
+    fn test_execution_manifest_finalize_hash() {
         let mut manifest = ExecutionManifest::new("test-policy", "linux", Criticality::High);
 
-        assert!(!manifest.has_valid_hashes());
+        assert!(!manifest.has_valid_hash());
 
-        manifest.finalize_hashes();
+        manifest.finalize_hash();
 
-        assert!(manifest.has_valid_hashes());
-        assert!(manifest.content_hash.starts_with("sha256:"));
-        assert!(manifest.evidence_hash.starts_with("sha256:"));
+        assert!(manifest.has_valid_hash());
+        assert!(manifest.replay_hash.starts_with("sha256:"));
     }
 
     #[test]

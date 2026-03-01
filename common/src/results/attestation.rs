@@ -5,16 +5,17 @@
 //!
 //! ## Hash Architecture
 //!
-//! The `evidence_hash` and `content_hash` are computed ONCE during execution
+//! The `replay_hash` is computed ONCE during execution
 //! in `ExecutionEngine::execute()` and passed to the builder. The builder
-//! does NOT compute hashes - it only accepts pre-computed values.
+//! does NOT compute the hash - it only accepts the pre-computed value.
 //!
 //! This ensures hash consistency across all output formats (attestation,
-//! full-results, assessor-evidence).
+//! full-results, assessor-evidence). The replay hash captures intent +
+//! contract + outcome rolled up through the CRI tree.
 //!
 //! ## Identity Status
 //!
-//! As of schema v1.1.0, all results include an `identity_status` field that
+//! As of schema v1.2.0, all results include an `identity_status` field that
 //! indicates whether PKI identity was established. This must be provided
 //! when building attestations.
 //!
@@ -165,16 +166,14 @@ impl CheckAttestation {
 /// ## Required Fields
 ///
 /// The builder requires the following fields to be set before building:
-/// - `content_hash` - Pre-computed from ExecutionManifest
-/// - `evidence_hash` - Pre-computed from ExecutionManifest
+/// - `replay_hash` - Pre-computed from ExecutionManifest
 /// - `identity_status` - PKI bootstrap status
 ///
 /// ## Example
 ///
 /// ```rust,ignore
 /// let builder = AttestationBuilder::new(agent, host)
-///     .with_content_hash(manifest.content_hash.clone())
-///     .with_evidence_hash(manifest.evidence_hash.clone())
+///     .with_replay_hash(manifest.replay_hash.clone())
 ///     .with_identity_status(identity_status);
 ///
 /// builder.add_check(check);
@@ -184,8 +183,7 @@ pub struct AttestationBuilder {
     agent: AgentInfo,
     host: HostInfo,
     checks: Vec<CheckAttestation>,
-    content_hash: Option<String>,
-    evidence_hash: Option<String>,
+    replay_hash: Option<String>,
     identity_status: Option<IdentityStatus>,
 }
 
@@ -196,8 +194,7 @@ impl AttestationBuilder {
             agent,
             host,
             checks: Vec::new(),
-            content_hash: None,
-            evidence_hash: None,
+            replay_hash: None,
             identity_status: None,
         }
     }
@@ -222,28 +219,19 @@ impl AttestationBuilder {
         self.checks.push(check);
     }
 
-    /// Set the content hash (pre-computed from ExecutionManifest)
+    /// Set the replay hash (pre-computed from ExecutionManifest)
     ///
     /// This hash is computed ONCE in the execution engine and must be
     /// passed through unchanged to ensure consistency.
-    pub fn with_content_hash(mut self, hash: impl Into<String>) -> Self {
-        self.content_hash = Some(hash.into());
-        self
-    }
-
-    /// Set the evidence hash (pre-computed from ExecutionManifest)
-    ///
-    /// This hash is computed ONCE in the execution engine and must be
-    /// passed through unchanged to ensure consistency.
-    pub fn with_evidence_hash(mut self, hash: impl Into<String>) -> Self {
-        self.evidence_hash = Some(hash.into());
+    pub fn with_replay_hash(mut self, hash: impl Into<String>) -> Self {
+        self.replay_hash = Some(hash.into());
         self
     }
 
     /// Set the identity status
     ///
     /// Indicates whether PKI identity was established during bootstrap.
-    /// This is required for schema v1.1.0 compliance.
+    /// This is required for schema v1.2.0 compliance.
     pub fn with_identity_status(mut self, identity_status: IdentityStatus) -> Self {
         self.identity_status = Some(identity_status);
         self
@@ -254,28 +242,19 @@ impl AttestationBuilder {
     /// ## Errors
     ///
     /// Returns an error if any required field is not set:
-    /// - `content_hash`
-    /// - `evidence_hash`
+    /// - `replay_hash`
     /// - `identity_status`
     pub fn build(self) -> Result<AttestationResult, ResultError> {
-        // Require pre-computed hashes
-        let content_hash = self.content_hash.ok_or_else(|| {
+        // Require pre-computed replay hash
+        let replay_hash = self.replay_hash.ok_or_else(|| {
             ResultError::BuildError(
-                "content_hash is required - must be pre-computed from ExecutionManifest"
-                    .to_string(),
-            )
-        })?;
-
-        let evidence_hash = self.evidence_hash.ok_or_else(|| {
-            ResultError::BuildError(
-                "evidence_hash is required - must be pre-computed from ExecutionManifest"
-                    .to_string(),
+                "replay_hash is required - must be pre-computed from ExecutionManifest".to_string(),
             )
         })?;
 
         // Require identity status
         let identity_status = self.identity_status.ok_or_else(|| {
-            ResultError::BuildError("identity_status is required for schema v1.1.0".to_string())
+            ResultError::BuildError("identity_status is required for schema v1.2.0".to_string())
         })?;
 
         // Build summary from checks
@@ -288,10 +267,9 @@ impl AttestationBuilder {
             }
         }
 
-        // Build envelope with pre-computed hashes and identity status
+        // Build envelope with pre-computed hash and identity status
         let envelope = ResultEnvelope::with_identity(self.agent, self.host, identity_status)
-            .with_content_hash(content_hash)
-            .with_evidence_hash(evidence_hash);
+            .with_replay_hash(replay_hash);
 
         Ok(AttestationResult::new(envelope, summary, self.checks))
     }
@@ -330,8 +308,7 @@ mod tests {
         let identity_status = IdentityStatus::success("scanset://test/workload");
 
         let mut builder = AttestationBuilder::new(agent, host)
-            .with_content_hash("sha256:content123")
-            .with_evidence_hash("sha256:evidence456")
+            .with_replay_hash("sha256:replay123")
             .with_identity_status(identity_status);
 
         builder.add_policy_check(
@@ -358,10 +335,7 @@ mod tests {
         assert_eq!(result.summary.total_policies, 2);
         assert_eq!(result.summary.passed, 1);
         assert_eq!(result.summary.failed, 1);
-        // Verify hashes are preserved
-        assert_eq!(result.envelope.content_hash, "sha256:content123");
-        assert_eq!(result.envelope.evidence_hash, "sha256:evidence456");
-        // Verify identity status
+        assert_eq!(result.envelope.replay_hash, "sha256:replay123");
         assert!(result.is_identity_bootstrapped());
         assert_eq!(
             result.envelope.identity_status.signer_id,
@@ -380,8 +354,7 @@ mod tests {
         );
 
         let mut builder = AttestationBuilder::new(agent, host)
-            .with_content_hash("sha256:content")
-            .with_evidence_hash("sha256:evidence")
+            .with_replay_hash("sha256:replay")
             .with_identity_status(identity_status);
 
         builder.add_policy_check(
@@ -404,13 +377,12 @@ mod tests {
     }
 
     #[test]
-    fn test_attestation_builder_requires_content_hash() {
+    fn test_attestation_builder_requires_replay_hash() {
         let agent = AgentInfo::default();
         let host = HostInfo::default();
 
         let mut builder = AttestationBuilder::new(agent, host)
-            // Missing content_hash
-            .with_evidence_hash("sha256:evidence")
+            // Missing replay_hash
             .with_identity_status(IdentityStatus::default());
 
         builder.add_policy_check(
@@ -427,34 +399,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("content_hash is required"));
-    }
-
-    #[test]
-    fn test_attestation_builder_requires_evidence_hash() {
-        let agent = AgentInfo::default();
-        let host = HostInfo::default();
-
-        let mut builder = AttestationBuilder::new(agent, host)
-            .with_content_hash("sha256:content")
-            // Missing evidence_hash
-            .with_identity_status(IdentityStatus::default());
-
-        builder.add_policy_check(
-            "test",
-            "linux",
-            Criticality::Medium,
-            vec![],
-            Outcome::Pass,
-            0.5,
-        );
-
-        let result = builder.build();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("evidence_hash is required"));
+            .contains("replay_hash is required"));
     }
 
     #[test]
@@ -462,9 +407,7 @@ mod tests {
         let agent = AgentInfo::default();
         let host = HostInfo::default();
 
-        let mut builder = AttestationBuilder::new(agent, host)
-            .with_content_hash("sha256:content")
-            .with_evidence_hash("sha256:evidence");
+        let mut builder = AttestationBuilder::new(agent, host).with_replay_hash("sha256:replay");
         // Missing identity_status
 
         builder.add_policy_check(
@@ -490,8 +433,7 @@ mod tests {
         let host = HostInfo::default();
 
         let mut builder = AttestationBuilder::new(agent, host)
-            .with_content_hash("sha256:test")
-            .with_evidence_hash("sha256:test")
+            .with_replay_hash("sha256:test")
             .with_identity_status(IdentityStatus::success("scanset://test"));
 
         builder.add_policy_check(
@@ -506,7 +448,6 @@ mod tests {
         let result = builder.build().unwrap();
         let json = result.to_json().unwrap();
 
-        // Verify identity_status is in the JSON
         assert!(json.contains("\"identity_status\":"));
         assert!(json.contains("\"bootstrapped\": true"));
 

@@ -18,7 +18,7 @@ use super::transparency::TransparencyProof;
 // ============================================================================
 
 /// Current schema version
-pub const SCHEMA_VERSION: &str = "1.1.0";
+pub const SCHEMA_VERSION: &str = "1.2.0";
 
 // ============================================================================
 // ResultEnvelope
@@ -26,15 +26,17 @@ pub const SCHEMA_VERSION: &str = "1.1.0";
 
 /// Universal envelope for all ESP result types
 ///
-/// Contains metadata about the scan execution, cryptographic hashes for
+/// Contains metadata about the scan execution, cryptographic hash for
 /// integrity verification, optional signature, and identity status.
 ///
 /// ## Schema Version
 ///
-/// The `schema_version` field indicates which version of the ESP schema
-/// this result conforms to. As of v1.1.0, the envelope includes:
-/// - `identity_status` (required) - PKI bootstrap status
-/// - `signature.transparency` (optional) - Certificate transparency proof
+/// As of v1.2.0, the envelope uses a single `replay_hash` (replacing the
+/// previous `content_hash` + `evidence_hash`). The replay hash captures
+/// intent + contract + outcome rolled up through the CRI tree.
+///
+/// The `identity_status` (required) tracks PKI bootstrap status.
+/// The `signature.transparency` (optional) provides certificate transparency proof.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultEnvelope {
     /// Unique identifier for this result
@@ -55,14 +57,14 @@ pub struct ResultEnvelope {
     /// When execution completed (ISO 8601)
     pub completed_at: String,
 
-    /// SHA-256 hash of the result content (for integrity)
-    pub content_hash: String,
-
-    /// SHA-256 hash of collected evidence
+    /// SHA-256 replay hash capturing intent + contract + outcome
     ///
-    /// Present in all output modes. Allows verification that
-    /// attestation matches full results.
-    pub evidence_hash: String,
+    /// Computed once during execution from the ReplayManifest. Stable
+    /// across runs when compliance posture is unchanged. Present in all
+    /// output modes. Allows verification that attestation matches full results.
+    ///
+    /// Replaces the previous `content_hash` + `evidence_hash`.
+    pub replay_hash: String,
 
     /// Cryptographic signature (present when PKI identity available)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,8 +91,7 @@ impl ResultEnvelope {
             host,
             started_at: now.clone(),
             completed_at: now,
-            content_hash: String::new(),
-            evidence_hash: String::new(),
+            replay_hash: String::new(),
             signature: None,
             identity_status: IdentityStatus::default(),
         }
@@ -110,8 +111,7 @@ impl ResultEnvelope {
             host,
             started_at: now.clone(),
             completed_at: now,
-            content_hash: String::new(),
-            evidence_hash: String::new(),
+            replay_hash: String::new(),
             signature: None,
             identity_status,
         }
@@ -135,15 +135,9 @@ impl ResultEnvelope {
         self
     }
 
-    /// Set the content hash
-    pub fn with_content_hash(mut self, hash: impl Into<String>) -> Self {
-        self.content_hash = hash.into();
-        self
-    }
-
-    /// Set the evidence hash
-    pub fn with_evidence_hash(mut self, hash: impl Into<String>) -> Self {
-        self.evidence_hash = hash.into();
+    /// Set the replay hash
+    pub fn with_replay_hash(mut self, hash: impl Into<String>) -> Self {
+        self.replay_hash = hash.into();
         self
     }
 
@@ -169,13 +163,13 @@ impl ResultEnvelope {
         self.identity_status.is_bootstrapped()
     }
 
-    /// Verify that evidence hash matches another envelope
+    /// Verify that replay hash matches another envelope
     ///
     /// Used to verify attestation matches full results
-    pub fn evidence_matches(&self, other: &ResultEnvelope) -> bool {
-        !self.evidence_hash.is_empty()
-            && !other.evidence_hash.is_empty()
-            && self.evidence_hash == other.evidence_hash
+    pub fn replay_hash_matches(&self, other: &ResultEnvelope) -> bool {
+        !self.replay_hash.is_empty()
+            && !other.replay_hash.is_empty()
+            && self.replay_hash == other.replay_hash
     }
 }
 
@@ -191,14 +185,12 @@ impl Default for ResultEnvelope {
 
 /// Cryptographic signature block
 ///
-/// Contains a digital signature over the envelope's content_hash and
-/// evidence_hash fields, along with the certificate chain and transparency
-/// proof for PKI verification.
+/// Contains a digital signature over the envelope's `replay_hash` field,
+/// along with the certificate chain and transparency proof for PKI verification.
 ///
 /// ## Signed Data
 ///
-/// The signature covers `SHA256(content_hash || evidence_hash)` where
-/// `||` denotes concatenation of the hash strings.
+/// The signature covers `SHA256(replay_hash)`.
 ///
 /// ## Verification Levels
 ///
@@ -208,7 +200,7 @@ impl Default for ResultEnvelope {
 ///
 /// ## Schema Reference
 ///
-/// Implements Section 3.5 of ESP v1.1.0 Canonical Execution Schema.
+/// Implements Section 3.5 of ESP v1.2.0 Canonical Execution Schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignatureBlock {
     /// Unique identifier for the signer
@@ -242,10 +234,10 @@ pub struct SignatureBlock {
 
     /// Base64-encoded payload that was signed
     ///
-    /// This is `SHA256(content_hash || evidence_hash)` - the 32-byte hash
-    /// that was passed to the signing function. Including this allows
-    /// verifiers to directly verify the signature without needing to
-    /// reconstruct the payload from the envelope fields.
+    /// This is `SHA256(replay_hash)` - the 32-byte hash that was passed
+    /// to the signing function. Including this allows verifiers to directly
+    /// verify the signature without needing to reconstruct the payload
+    /// from the envelope fields.
     ///
     /// Note: The actual ECDSA signature is over `SHA256(payload)` since
     /// OpenSSL's signer hashes the input before signing.
@@ -267,8 +259,8 @@ pub struct SignatureBlock {
 
     /// Fields covered by this signature
     ///
-    /// Standard value: `["content_hash", "evidence_hash"]`
-    /// The signature is over `SHA256(content_hash || evidence_hash)`.
+    /// Standard value: `["replay_hash"]`
+    /// The signature is over `SHA256(replay_hash)`.
     pub covers: Vec<String>,
 
     /// X.509 certificate chain (PEM encoded)
@@ -336,6 +328,7 @@ impl SignatureBlock {
     /// * `algorithm` - Signing algorithm (typically "ecdsa-p256")
     /// * `public_key` - Base64-encoded public key (DER format)
     /// * `signature` - Base64-encoded signature value (DER format)
+    /// * `payload` - Base64-encoded signed payload (SHA256 of replay_hash)
     /// * `key_id` - Certificate serial (e.g., "pki:cert:1234567890abcdef")
     /// * `signed_at` - ISO 8601 timestamp when signature was created
     /// * `certificate_chain` - PEM-encoded certificate chain
@@ -346,7 +339,7 @@ impl SignatureBlock {
         algorithm: impl Into<String>,
         public_key: impl Into<String>,
         signature: impl Into<String>,
-        payload: impl Into<String>, // <-- ADD THIS NEW PARAMETER
+        payload: impl Into<String>,
         key_id: impl Into<String>,
         signed_at: impl Into<String>,
         certificate_chain: Vec<String>,
@@ -358,7 +351,7 @@ impl SignatureBlock {
             algorithm: algorithm.into(),
             public_key: public_key.into(),
             signature: signature.into(),
-            payload: Some(payload.into()), // <-- SET THE PAYLOAD
+            payload: Some(payload.into()),
             key_id: key_id.into(),
             signed_at: signed_at.into(),
             covers: Self::standard_covers(),
@@ -386,8 +379,11 @@ impl SignatureBlock {
     }
 
     /// Create standard covers for envelope hash signing
+    ///
+    /// As of v1.2.0, signature covers only `replay_hash` (single hash
+    /// replacing the previous `content_hash` + `evidence_hash`).
     pub fn standard_covers() -> Vec<String> {
-        vec!["content_hash".to_string(), "evidence_hash".to_string()]
+        vec!["replay_hash".to_string()]
     }
 
     /// Check if this signature has PKI identity (certificate chain)
@@ -589,7 +585,7 @@ mod tests {
         let envelope = ResultEnvelope::new(agent, host);
 
         assert!(envelope.result_id.starts_with("esp-result-"));
-        assert_eq!(envelope.schema_version, "1.1.0");
+        assert_eq!(envelope.schema_version, "1.2.0");
         assert!(!envelope.is_signed());
         assert!(!envelope.is_identity_bootstrapped());
     }
@@ -615,20 +611,20 @@ mod tests {
     }
 
     #[test]
-    fn test_evidence_matches() {
+    fn test_replay_hash_matches() {
         let agent = AgentInfo::default();
         let host = HostInfo::default();
 
         let envelope1 =
-            ResultEnvelope::new(agent.clone(), host.clone()).with_evidence_hash("sha256:abc123");
+            ResultEnvelope::new(agent.clone(), host.clone()).with_replay_hash("sha256:abc123");
 
         let envelope2 =
-            ResultEnvelope::new(agent.clone(), host.clone()).with_evidence_hash("sha256:abc123");
+            ResultEnvelope::new(agent.clone(), host.clone()).with_replay_hash("sha256:abc123");
 
-        let envelope3 = ResultEnvelope::new(agent, host).with_evidence_hash("sha256:different");
+        let envelope3 = ResultEnvelope::new(agent, host).with_replay_hash("sha256:different");
 
-        assert!(envelope1.evidence_matches(&envelope2));
-        assert!(!envelope1.evidence_matches(&envelope3));
+        assert!(envelope1.replay_hash_matches(&envelope2));
+        assert!(!envelope1.replay_hash_matches(&envelope3));
     }
 
     #[test]
@@ -656,7 +652,7 @@ mod tests {
         assert_eq!(sig.algorithm, "tpm-ecdsa-p256");
         assert_eq!(sig.public_key, "BASE64_PUBLIC_KEY");
         assert_eq!(sig.signature, "BASE64_SIGNATURE");
-        assert_eq!(sig.covers, vec!["content_hash", "evidence_hash"]);
+        assert_eq!(sig.covers, vec!["replay_hash"]);
         assert!(!sig.signed_at.is_empty());
         assert!(sig.certificate_chain.is_none());
         assert!(sig.transparency.is_none());
@@ -679,7 +675,7 @@ mod tests {
             "ecdsa-p256",
             "BASE64_PUBLIC_KEY",
             "BASE64_SIGNATURE",
-            "BASE64_PAYLOAD", // <-- ADD THIS
+            "BASE64_PAYLOAD",
             "pki:cert:1234567890abcdef",
             "2026-01-24T12:00:00Z",
             vec!["CERT1".to_string(), "CERT2".to_string()],
@@ -745,22 +741,23 @@ mod tests {
         let identity = IdentityStatus::success("scanset://test");
 
         let envelope = ResultEnvelope::with_identity(agent, host, identity)
-            .with_content_hash("sha256:content")
-            .with_evidence_hash("sha256:evidence");
+            .with_replay_hash("sha256:replay123");
 
         let json = serde_json::to_string_pretty(&envelope).unwrap();
 
-        assert!(json.contains("\"schema_version\": \"1.1.0\""));
+        assert!(json.contains("\"schema_version\": \"1.2.0\""));
         assert!(json.contains("\"identity_status\":"));
         assert!(json.contains("\"bootstrapped\": true"));
         assert!(json.contains("\"signer_id\": \"scanset://test\""));
+        assert!(json.contains("\"replay_hash\": \"sha256:replay123\""));
 
         // signature should be omitted when None
         assert!(!json.contains("\"signature\":"));
 
         let parsed: ResultEnvelope = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.schema_version, "1.1.0");
+        assert_eq!(parsed.schema_version, "1.2.0");
         assert!(parsed.identity_status.is_bootstrapped());
+        assert_eq!(parsed.replay_hash, "sha256:replay123");
     }
 
     #[test]
@@ -795,7 +792,7 @@ mod tests {
             "ecdsa-p256",
             "BASE64_PUBLIC_KEY",
             "BASE64_SIGNATURE",
-            "BASE64_PAYLOAD", // <-- ADD THIS
+            "BASE64_PAYLOAD",
             "pki:cert:1234567890abcdef",
             "2026-01-24T12:00:00Z",
             vec!["CERT1".to_string(), "CERT2".to_string()],
@@ -816,6 +813,6 @@ mod tests {
 
     #[test]
     fn test_schema_version_constant() {
-        assert_eq!(SCHEMA_VERSION, "1.1.0");
+        assert_eq!(SCHEMA_VERSION, "1.2.0");
     }
 }

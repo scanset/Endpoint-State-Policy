@@ -9,29 +9,32 @@
 //!
 //! ```text
 //! ExecutionEngine::execute()
-//!   └── ExecutionManifest (raw, complete, with canonical hashes)
+//!   └── ExecutionManifest (raw, complete, with replay hash)
 //!         ├── Policy identity (id, platform, criticality, mappings)
 //!         ├── Policy metadata (version, title, description, author, tags, extended)
 //!         ├── Tree result (logical structure with pass/fail)
 //!         ├── Collected data (with CollectionMethod)
 //!         ├── Findings (validation failures)
-//!         ├── ContentManifest → content_hash (computed ONCE)
-//!         └── EvidenceManifest → evidence_hash (computed ONCE)
+//!         └── ReplayManifest → replay_hash (computed ONCE)
 //!
 //!         ↓ ResultBuilder (in common/results) transforms to ↓
 //!
-//!         ├── Attestation (CUI-free, uses manifest.evidence_hash)
-//!         ├── FullResults (with Evidence, uses manifest.evidence_hash)
-//!         └── AssessorResults (with Evidence + command/inputs, uses manifest.evidence_hash)
+//!         ├── Attestation (CUI-free, uses manifest.replay_hash)
+//!         ├── FullResults (with Evidence, uses manifest.replay_hash)
+//!         └── AssessorResults (with Evidence + command/inputs, uses manifest.replay_hash)
 //! ```
 //!
-//! ## Hash Consistency
+//! ## Replay Hash
 //!
-//! The `content_hash` and `evidence_hash` are computed ONCE in `execute()` before
-//! returning. All output formats MUST use these hashes directly to ensure:
-//! - Attestations can be verified against full results
-//! - Assessor packages can be linked to attestations
-//! - SIEM/SOAR can trust attestation hashes
+//! The `replay_hash` replaces the previous `content_hash` + `evidence_hash`.
+//! It captures the complete verification lifecycle in three layers:
+//! - **Intent**: What STATEs were checked, with what operations and expected values
+//! - **Contract**: How the system collected and validated (collector, field mappings)
+//! - **Outcome**: Pass/fail per field (NO actual collected values)
+//!
+//! Criterion hashes are rolled up through the CRI tree structure (AND/OR/NOT)
+//! to produce a single deterministic hash that is stable across runs when
+//! compliance posture is unchanged.
 
 use crate::execution::behavior::extract_behavior_hints;
 use crate::execution::comparisons::{string, ComparisonExt};
@@ -40,11 +43,15 @@ use crate::execution::filter_evaluation::FilterEvaluator;
 use crate::strategies::CtnExecutionError;
 use crate::strategies::{CollectedData, CtnContract, CtnExecutionResult, CtnStrategyRegistry};
 use crate::types::canonical_manifest::{
-    ContentManifest, CriterionEvidence, EvidenceManifest, ObjectEvidence,
+    CriterionReplay, ReplayContract, ReplayFieldIntent, ReplayFieldOutcome, ReplayIntent,
+    ReplayManifest, ReplayObjectIntent, ReplayObjectOutcome, ReplayOutcome,
+    ReplayRecordCheckIntent, ReplayRecordContentIntent, ReplayRecordFieldIntent, ReplayStateIntent,
+    ReplayTestSpec, ReplayTreeNode,
 };
 use crate::types::common::{LogicalOp, ResolvedValue};
 use crate::types::execution_context::{
-    ExecutableCriteriaTree, ExecutableCriterion, ExecutableObject, ExecutionContext,
+    ExecutableCriteriaTree, ExecutableCriterion, ExecutableObject, ExecutableObjectElement,
+    ExecutableRecordContent, ExecutionContext,
 };
 use crate::types::manifest::{
     is_known_meta_field, CtnResult, ExecutionManifest, PolicyMetadataFields, TreeResult,
@@ -53,11 +60,11 @@ use common::ast::nodes::FilterAction;
 use common::metadata::MetaDataBlock;
 use common::results::builder::PolicyMetadata;
 use common::results::common::PolicyOutcome;
-use common::results::crypto::sha256_hash;
 use common::results::{
     ComplianceFinding, ControlMapping, CriteriaCounts, Criticality, FindingSeverity, Outcome,
 };
 use common::{log_debug, log_info};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -84,10 +91,10 @@ impl ExecutionEngine {
     /// Executes the criteria tree for a single policy and produces an `ExecutionManifest`.
     /// The manifest contains all raw data needed to build any output format.
     ///
-    /// ## Canonical Hashes
+    /// ## Replay Hash
     ///
-    /// This method computes `content_hash` and `evidence_hash` ONCE before returning.
-    /// All output builders MUST use these hashes directly - never recompute!
+    /// This method computes `replay_hash` ONCE before returning.
+    /// All output builders MUST use this hash directly - never recompute!
     pub fn execute(&mut self) -> Result<ExecutionManifest, ExecutionError> {
         let start_time = Instant::now();
 
@@ -181,23 +188,20 @@ impl ExecutionEngine {
         let execution_duration = start_time.elapsed();
 
         // ====================================================================
-        // BUILD CANONICAL MANIFESTS AND COMPUTE HASHES (ONCE!)
+        // BUILD REPLAY MANIFEST AND COMPUTE HASH (ONCE!)
         // ====================================================================
-        let content_manifest =
-            self.build_content_manifest(meta_block, &control_mappings, &tree_result);
-        let evidence_manifest = self.build_evidence_manifest(&tree_result);
+        let replay_manifest =
+            self.build_replay_manifest(meta_block, &control_mappings, &tree_result);
 
-        // Compute hashes ONCE - all output formats MUST use these directly
-        let content_hash = content_manifest.compute_hash();
-        let evidence_hash = evidence_manifest.compute_hash();
+        // Compute replay hash ONCE - all output formats MUST use this directly
+        let replay_hash = replay_manifest.compute_replay_hash();
 
         log_debug!(
-            "Computed canonical hashes",
-            "content_hash" => &content_hash,
-            "evidence_hash" => &evidence_hash
+            "Computed replay hash",
+            "replay_hash" => &replay_hash
         );
 
-        // Build the execution manifest with canonical hashes
+        // Build the execution manifest
         Ok(ExecutionManifest {
             policy_id,
             platform,
@@ -209,10 +213,8 @@ impl ExecutionEngine {
             tree_passed: stats.failed == 0 && stats.errors == 0,
             collected_data,
             findings,
-            content_manifest,
-            evidence_manifest,
-            content_hash,
-            evidence_hash,
+            replay_manifest,
+            replay_hash,
             executed_at: current_timestamp(),
             execution_duration_ms: execution_duration.as_millis() as u64,
         })
@@ -274,23 +276,23 @@ impl ExecutionEngine {
     }
 
     // ========================================================================
-    // Canonical Manifest Building
+    // Replay Manifest Building
     // ========================================================================
 
-    /// Build the canonical content manifest (WHAT was evaluated)
+    /// Build the canonical replay manifest
     ///
-    /// This captures the policy identity and evaluation context in a
-    /// deterministic format suitable for hashing.
-    fn build_content_manifest(
+    /// Walks the tree result to construct per-criterion replay entries
+    /// (intent + contract + outcome) and the tree structure for hash rollup.
+    /// Replaces the previous `build_content_manifest()` + `build_evidence_manifest()`.
+    fn build_replay_manifest(
         &self,
         metadata: &MetaDataBlock,
         control_mappings: &[ControlMapping],
         tree_result: &TreeResult,
-    ) -> ContentManifest {
+    ) -> ReplayManifest {
         let policy_id = metadata.policy_id().unwrap_or("unknown").to_string();
         let platform = metadata.platform().unwrap_or("unknown").to_string();
         let criticality = metadata.criticality().unwrap_or("medium").to_string();
-        let version = metadata.get("version").map(String::from);
 
         // Convert control mappings to sorted strings for determinism
         let mut mapping_strings: Vec<String> = control_mappings
@@ -299,79 +301,297 @@ impl ExecutionEngine {
             .collect();
         mapping_strings.sort();
 
-        // Compute criteria structure hash
-        let criteria_hash = self.compute_criteria_structure_hash(tree_result);
+        let mut manifest = ReplayManifest::new(&policy_id, &platform, &criticality)
+            .with_control_mappings(mapping_strings);
 
-        let mut manifest = ContentManifest::new(&policy_id, &platform)
-            .with_criticality(&criticality)
-            .with_control_mappings(mapping_strings)
-            .with_criteria_hash(criteria_hash);
+        // Build per-criterion replay entries from the tree
+        self.build_criterion_replays(tree_result, &mut manifest);
 
-        if let Some(v) = version {
-            manifest = manifest.with_version(v);
-        }
+        // Build the tree structure for hash rollup
+        let tree_structure = self.build_replay_tree_structure(tree_result);
+        manifest.set_tree_structure(tree_structure);
 
         manifest
     }
 
-    /// Build the canonical evidence manifest (WHAT was observed)
-    ///
-    /// This captures the collected evidence in a deterministic format
-    /// suitable for hashing.
-    fn build_evidence_manifest(&self, tree_result: &TreeResult) -> EvidenceManifest {
-        let mut manifest = EvidenceManifest::new();
+    /// Recursively extract criterion replay entries from the tree result
+    fn build_criterion_replays(&self, tree_result: &TreeResult, manifest: &mut ReplayManifest) {
+        // Process CTN results at this level
+        for ctn_result in &tree_result.ctn_results {
+            let replay = self.build_single_criterion_replay(ctn_result);
+            manifest.add_criterion(ctn_result.ctn_node_id.to_string(), replay);
+        }
 
-        // Process all CTN results from the tree
-        for ctn_result in tree_result.collect_ctn_results() {
-            let mut criterion_evidence = CriterionEvidence::new(
-                &ctn_result.criterion_type,
-                format!("{:?}", ctn_result.status),
+        // Recurse into children
+        for child in &tree_result.child_results {
+            self.build_criterion_replays(child, manifest);
+        }
+    }
+
+    /// Build the three-layer replay entry for a single CTN result
+    fn build_single_criterion_replay(&self, ctn_result: &CtnResult) -> CriterionReplay {
+        let intent = self.build_replay_intent(ctn_result);
+        let contract = self.build_replay_contract(ctn_result);
+        let outcome = self.build_replay_outcome(ctn_result);
+
+        CriterionReplay {
+            intent,
+            contract,
+            outcome,
+        }
+    }
+
+    /// Build the INTENT layer from the execution context's resolved AST
+    ///
+    /// Captures: ctn_type, TEST spec, STATE fields (name, data_type, operation,
+    /// expected_value, entity_check), record checks, and OBJECT identifiers + fields.
+    fn build_replay_intent(&self, ctn_result: &CtnResult) -> ReplayIntent {
+        // Find the original criterion in the execution context by ctn_node_id
+        let criterion = self
+            .context
+            .criteria_tree
+            .get_all_criteria()
+            .into_iter()
+            .find(|c| c.ctn_node_id == ctn_result.ctn_node_id);
+
+        match criterion {
+            Some(crit) => {
+                // TEST specification
+                let test_spec = ReplayTestSpec {
+                    existence_check: crit.test.existence_check.as_str().to_string(),
+                    item_check: crit.test.item_check.as_str().to_string(),
+                    state_operator: crit.test.state_operator.map(|op| op.as_str().to_string()),
+                };
+
+                // STATE definitions with expected values
+                let mut states = BTreeMap::new();
+                for state in &crit.states {
+                    // Regular field intents
+                    let mut fields = BTreeMap::new();
+                    for field in &state.fields {
+                        fields.insert(
+                            field.name.clone(),
+                            ReplayFieldIntent {
+                                data_type: format!("{:?}", field.data_type),
+                                operation: field.operation.as_str().to_string(),
+                                expected_value: resolved_value_to_json(&field.value),
+                                entity_check: field.entity_check.map(|ec| ec.as_str().to_string()),
+                            },
+                        );
+                    }
+
+                    // Record check intents
+                    let record_checks: Vec<ReplayRecordCheckIntent> = state
+                        .record_checks
+                        .iter()
+                        .map(|check| {
+                            let content = match &check.content {
+                                ExecutableRecordContent::Direct { operation, value } => {
+                                    ReplayRecordContentIntent::Direct {
+                                        operation: operation.as_str().to_string(),
+                                        expected_value: resolved_value_to_json(value),
+                                    }
+                                }
+                                ExecutableRecordContent::Nested { fields } => {
+                                    let mut nested_fields = BTreeMap::new();
+                                    for f in fields {
+                                        nested_fields.insert(
+                                            f.path.to_dot_notation(),
+                                            ReplayRecordFieldIntent {
+                                                data_type: format!("{:?}", f.data_type),
+                                                operation: f.operation.as_str().to_string(),
+                                                expected_value: resolved_value_to_json(&f.value),
+                                                entity_check: f
+                                                    .entity_check
+                                                    .map(|ec| ec.as_str().to_string()),
+                                            },
+                                        );
+                                    }
+                                    ReplayRecordContentIntent::Nested {
+                                        fields: nested_fields,
+                                    }
+                                }
+                            };
+
+                            ReplayRecordCheckIntent {
+                                data_type: check.data_type.map(|dt| format!("{:?}", dt)),
+                                content,
+                            }
+                        })
+                        .collect();
+
+                    states.insert(
+                        state.identifier.clone(),
+                        ReplayStateIntent {
+                            fields,
+                            record_checks,
+                        },
+                    );
+                }
+
+                // OBJECT identifiers and declared fields
+                let mut objects = BTreeMap::new();
+                for obj in &crit.objects {
+                    let mut obj_fields = BTreeMap::new();
+                    for elem in &obj.elements {
+                        if let ExecutableObjectElement::Field { name, value, .. } = elem {
+                            obj_fields.insert(name.clone(), resolved_value_to_json(value));
+                        }
+                    }
+                    objects.insert(
+                        obj.identifier.clone(),
+                        ReplayObjectIntent { fields: obj_fields },
+                    );
+                }
+
+                ReplayIntent {
+                    ctn_type: crit.criterion_type.clone(),
+                    test_spec,
+                    states,
+                    objects,
+                }
+            }
+            None => {
+                // Fallback if criterion not found in context (shouldn't happen)
+                ReplayIntent {
+                    ctn_type: ctn_result.criterion_type.clone(),
+                    test_spec: ReplayTestSpec {
+                        existence_check: "unknown".to_string(),
+                        item_check: "unknown".to_string(),
+                        state_operator: None,
+                    },
+                    states: BTreeMap::new(),
+                    objects: BTreeMap::new(),
+                }
+            }
+        }
+    }
+
+    /// Build the CONTRACT layer from the CtnContract registry
+    ///
+    /// Captures: ctn_type, collector_id, collection_mode, validation_mappings
+    /// (state_field → data_field). These are execution provenance — they prove
+    /// HOW the system interpreted the policy intent.
+    fn build_replay_contract(&self, ctn_result: &CtnResult) -> ReplayContract {
+        let contract_info = self
+            .registry
+            .get_ctn_contract(&ctn_result.criterion_type)
+            .ok();
+
+        // Get collector_id from the collected data (runtime provenance)
+        let collector_id = ctn_result
+            .execution_result
+            .collected_data
+            .values()
+            .next()
+            .map(|d| d.metadata.collector_id.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        match contract_info {
+            Some(contract) => {
+                let collection_mode = format!("{:?}", contract.collection_strategy.collection_mode);
+
+                // Build sorted validation mappings (BTreeMap)
+                let validation_mappings: BTreeMap<String, String> = contract
+                    .field_mappings
+                    .validation_mappings
+                    .state_to_data
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+
+                ReplayContract {
+                    ctn_type: ctn_result.criterion_type.clone(),
+                    collector_id,
+                    collection_mode,
+                    validation_mappings,
+                }
+            }
+            None => ReplayContract {
+                ctn_type: ctn_result.criterion_type.clone(),
+                collector_id,
+                collection_mode: "unknown".to_string(),
+                validation_mappings: BTreeMap::new(),
+            },
+        }
+    }
+
+    /// Build the OUTCOME layer from execution results
+    ///
+    /// Captures: overall status, per-object pass/fail, per-field pass/fail
+    /// with operation and expected value. Does NOT include actual collected
+    /// values — those are volatile and would destabilize the hash.
+    fn build_replay_outcome(&self, ctn_result: &CtnResult) -> ReplayOutcome {
+        let mut object_results = BTreeMap::new();
+
+        for state_result in &ctn_result.execution_result.state_results {
+            let mut field_results = BTreeMap::new();
+
+            for field_result in &state_result.state_results {
+                field_results.insert(
+                    field_result.field_name.clone(),
+                    ReplayFieldOutcome {
+                        operation: field_result.operation.as_str().to_string(),
+                        expected: resolved_value_to_json(&field_result.expected_value),
+                        passed: field_result.passed,
+                    },
+                );
+            }
+
+            object_results.insert(
+                state_result.object_id.clone(),
+                ReplayObjectOutcome {
+                    passed: state_result.combined_result,
+                    field_results,
+                },
             );
-
-            // Process collected data for this CTN
-            for (object_id, data) in &ctn_result.execution_result.collected_data {
-                let method_type = data
-                    .metadata
-                    .method
-                    .as_ref()
-                    .map(|m| m.method_type.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-
-                let mut object_evidence = ObjectEvidence::new(&method_type);
-
-                // Convert fields to JSON values (BTreeMap ensures deterministic order)
-                for (field_name, field_value) in &data.fields {
-                    let json_value = resolved_value_to_json(field_value);
-                    object_evidence.add_field(field_name, json_value);
-                }
-
-                // Mark as failed if collection had errors
-                if !data.metadata.warnings.is_empty() {
-                    // Still succeeded but with warnings - keep as success
-                }
-
-                criterion_evidence.add_object(object_id, object_evidence);
-            }
-
-            // Use CTN node ID as criterion identifier
-            manifest.add_criterion(ctn_result.ctn_node_id.to_string(), criterion_evidence);
         }
 
-        manifest
+        ReplayOutcome {
+            status: format!("{:?}", ctn_result.status),
+            object_results,
+        }
     }
 
-    /// Compute a deterministic hash of the criteria tree structure
+    /// Build the tree structure for hash rollup (mirrors CRI AND/OR/NOT)
     ///
-    /// This captures the logical structure (AND/OR/NOT, CTN types) without runtime values.
-    fn compute_criteria_structure_hash(&self, tree_result: &TreeResult) -> String {
-        let structure = tree_to_structure_string(tree_result);
+    /// Produces a `ReplayTreeNode` that mirrors the CRI tree structure.
+    /// Leaf nodes reference criterion hashes by ctn_node_id.
+    /// Block nodes encode the logical operator and negation.
+    fn build_replay_tree_structure(&self, tree_result: &TreeResult) -> ReplayTreeNode {
+        // Leaf: single CTN result, no children
+        if tree_result.ctn_results.len() == 1 && tree_result.child_results.is_empty() {
+            return ReplayTreeNode::Leaf {
+                ctn_node_id: tree_result.ctn_results[0].ctn_node_id.to_string(),
+            };
+        }
 
-        match sha256_hash(structure.as_bytes()) {
-            Ok(digest) => {
-                let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
-                format!("sha256:{}", hex)
-            }
-            Err(_) => "sha256:error-computing-structure-hash".to_string(),
+        // Collect all children (both leaf CTN results and nested blocks)
+        let mut children: Vec<ReplayTreeNode> = Vec::new();
+
+        for ctn_result in &tree_result.ctn_results {
+            children.push(ReplayTreeNode::Leaf {
+                ctn_node_id: ctn_result.ctn_node_id.to_string(),
+            });
+        }
+
+        for child in &tree_result.child_results {
+            children.push(self.build_replay_tree_structure(child));
+        }
+
+        let logical_op = tree_result
+            .logical_op
+            .map(|op| match op {
+                LogicalOp::And => "AND",
+                LogicalOp::Or => "OR",
+            })
+            .unwrap_or("AND")
+            .to_string();
+
+        ReplayTreeNode::Block {
+            logical_op,
+            negate: tree_result.negated,
+            children,
         }
     }
 
@@ -1098,10 +1318,10 @@ impl ExecutionEngine {
 /// **DEPRECATED**: Use `ExecutionManifest` directly. This type is provided
 /// for backwards compatibility with existing code.
 ///
-/// ## Canonical Hashes
+/// ## Replay Hash
 ///
-/// The `content_hash` and `evidence_hash` fields are carried through from
-/// the `ExecutionManifest`. All output builders MUST use these directly.
+/// The `replay_hash` field is carried through from the `ExecutionManifest`.
+/// All output builders MUST use this directly.
 #[derive(Debug, Clone)]
 pub struct PolicyExecutionResult {
     /// Policy outcome
@@ -1114,10 +1334,11 @@ pub struct PolicyExecutionResult {
     pub evidence: Option<common::results::Evidence>,
     /// Whether the tree passed
     pub tree_passed: bool,
-    /// SHA-256 hash of canonical content manifest
-    pub content_hash: String,
-    /// SHA-256 hash of canonical evidence manifest
-    pub evidence_hash: String,
+    /// SHA-256 replay hash capturing intent + contract + outcome
+    ///
+    /// Replaces the previous `content_hash` + `evidence_hash`.
+    /// Stable across runs when compliance posture is unchanged.
+    pub replay_hash: String,
     /// Policy metadata (optional + extended fields)
     ///
     /// Contains version, title, description, author, tags, and any
@@ -1177,9 +1398,8 @@ impl From<ExecutionManifest> for PolicyExecutionResult {
             findings: manifest.findings,
             evidence,
             tree_passed: manifest.tree_passed,
-            // CRITICAL: Carry through the canonical hashes!
-            content_hash: manifest.content_hash,
-            evidence_hash: manifest.evidence_hash,
+            // CRITICAL: Carry through the replay hash!
+            replay_hash: manifest.replay_hash,
             // CRITICAL: Carry through the metadata!
             metadata,
         }
@@ -1202,9 +1422,9 @@ impl PolicyExecutionResult {
         &self.outcome.policy_id
     }
 
-    /// Check if canonical hashes are present
-    pub fn has_valid_hashes(&self) -> bool {
-        !self.content_hash.is_empty() && !self.evidence_hash.is_empty()
+    /// Check if replay hash is present
+    pub fn has_valid_hash(&self) -> bool {
+        !self.replay_hash.is_empty()
     }
 
     /// Check if metadata has any content
@@ -1276,46 +1496,6 @@ fn logical_op_to_string(op: LogicalOp) -> &'static str {
         LogicalOp::And => "AND",
         LogicalOp::Or => "OR",
     }
-}
-
-/// Convert tree to a deterministic string representation for hashing
-fn tree_to_structure_string(tree: &TreeResult) -> String {
-    let mut parts = Vec::new();
-
-    // Add logical operator info
-    if let Some(op) = tree.logical_op {
-        let op_str = match op {
-            LogicalOp::And => "AND",
-            LogicalOp::Or => "OR",
-        };
-        if tree.negated {
-            parts.push(format!("NOT({})", op_str));
-        } else {
-            parts.push(op_str.to_string());
-        }
-    }
-
-    // Add CTN types (sorted for determinism)
-    let mut ctn_types: Vec<String> = tree
-        .ctn_results
-        .iter()
-        .map(|r| r.criterion_type.clone())
-        .collect();
-    ctn_types.sort();
-    for ctn_type in ctn_types {
-        parts.push(format!("CTN:{}", ctn_type));
-    }
-
-    // Recurse into children (sorted for determinism)
-    let mut child_strings: Vec<String> = tree
-        .child_results
-        .iter()
-        .map(tree_to_structure_string)
-        .collect();
-    child_strings.sort();
-    parts.extend(child_strings);
-
-    parts.join("|")
 }
 
 /// Convert ResolvedValue to serde_json::Value
