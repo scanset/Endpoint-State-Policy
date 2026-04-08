@@ -1,5 +1,19 @@
 # Changelog with Security Notes
 
+## [1.2.1] — 2026-04-08
+
+### Fixed
+
+- **Criterion execution error reporting** (execution_engine): Errors returned by `execute_single_criterion()` are now caught and recorded as `Outcome::Fail` on the affected criterion rather than propagating as a hard `Err` that aborted the entire policy execution. Previously, any execution error (missing contract, collector, executor, timeout, etc.) caused `execute()` to return `Err(ExecutionError)` with no policy result. The criterion is now marked failed with the error message, execution continues through the remaining tree, and the policy outcome reflects the failure correctly.
+
+### Files Modified
+
+| File | Crate | Changes |
+|------|-------|---------|
+| `engine.rs` | execution_engine | `execute_tree()` — replaced `?` propagation on `execute_single_criterion()` with a `match` that converts `Err` to `CtnExecutionResult::fail()` |
+
+---
+
 ## [1.2.0] — 2026-03-01
 
 ### Summary

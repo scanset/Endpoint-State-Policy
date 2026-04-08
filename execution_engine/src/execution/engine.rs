@@ -647,8 +647,14 @@ impl ExecutionEngine {
                 // Clone the criterion so we can mutate it
                 let mut mutable_criterion = criterion.clone();
 
-                // Execute with mutable reference
-                let result = self.execute_single_criterion(&mut mutable_criterion)?;
+                // Execute with mutable reference; on error, record a Fail rather than aborting
+                let result = match self.execute_single_criterion(&mut mutable_criterion) {
+                    Ok(r) => r,
+                    Err(e) => CtnExecutionResult::fail(
+                        criterion.criterion_type.clone(),
+                        format!("Policy execution error: {}", e),
+                    ),
+                };
 
                 let ctn_result = CtnResult::new(
                     criterion.ctn_node_id,
