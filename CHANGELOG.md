@@ -1,5 +1,41 @@
 # Changelog with Security Notes
 
+## [1.2.2] — 2026-04-09
+
+### Added
+
+- **Dynamic environment variable injection** (execution_engine): `SystemCommandExecutor` now supports injecting environment variables into spawned processes after `env_clear()`. Two modes:
+  - `set_env(key, value)` — static injection, value fixed at configuration time.
+  - `set_env_from(child_var, source_var)` — dynamic injection, reads `source_var` from the agent's environment on every `execute()` call. Supports credential rotation without agent restart.
+- Resolution order in spawned process: `env_clear()` → `PATH` (restricted) → static env → dynamic env (resolved at call time).
+- New tests: `test_set_env_from_resolves_at_execute_time`, `test_set_env_from_skips_missing_var`.
+
+### Use Cases
+
+- PostgreSQL: `set_env_from("PGPASSWORD", "ESP_PG_PASS")` — psql reads password from agent env on each scan.
+- AWS CLI: `set_env_from("HOME", "ESP_HOME")` — explicit home dir for credential file discovery.
+- Kubernetes: `set_env_from("KUBECONFIG", "ESP_KUBECONFIG")` — kubectl config path injection.
+- Any tool that reads credentials or config from environment variables.
+
+### Security Notes
+
+- `env_clear()` behavior is unchanged — all inherited vars are still wiped.
+- Only explicitly configured vars (via `set_env` or `set_env_from`) reach the child process.
+- Dynamic vars that are not set in the agent's environment are silently skipped (no error, no default).
+- Credential values from `set_env_from` are never logged in evidence or command strings.
+
+### Files Modified
+
+| File | Crate | Changes |
+|------|-------|---------|
+| `command_executor.rs` | execution_engine | Added `static_env` and `dynamic_env` fields, `set_env()`, `set_envs()`, `set_env_from()`, `resolve_dynamic_env()` methods. Updated `execute()` to inject both static and dynamic env vars after `env_clear()`. Added 2 new tests. |
+
+### Backward Compatibility
+
+Fully backward compatible. Existing API (`new()`, `with_timeout()`, `allow_command()`, `allow_commands()`, `is_allowed()`, `execute()`) is unchanged. Executors with no env configuration behave identically to v1.2.1.
+
+---
+
 ## [1.2.1] — 2026-04-08
 
 ### Fixed
