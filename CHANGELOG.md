@@ -1,5 +1,49 @@
 # Changelog with Security Notes
 
+## [1.2.3] — 2026-04-10
+
+### Fixed
+
+- **PATH merging in SystemCommandExecutor** (execution_engine): The base restricted `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) was previously applied via `.env("PATH", ...)` followed by `.envs(&self.static_env)`. While `std::process::Command` does allow later `.env()` calls to override earlier ones, the single-call base path meant any `set_env("PATH", "/usr/pgsql-16/bin:/usr/pgsql-15/bin:...")` replaced the base entirely instead of extending it. Vendor-specific binary locations that should have been additive ended up displacing standard system paths (or vice versa depending on HashMap ordering), producing `ProgramNotFound` errors for tools like `psql` that are installed under `/usr/pgsql-16/bin`.
+
+### Behavior Change
+
+`execute()` now **merges** the PATH instead of overriding it:
+
+1. Start with the base restricted PATH: `/usr/bin:/bin:/usr/sbin:/sbin`
+2. If `set_env("PATH", ...)` was called, prepend its value to the base
+3. If `set_env_from("PATH", "SOME_VAR")` resolves, prepend its value to the result
+4. Apply the merged PATH as a single `.env("PATH", final_path)` call
+5. Iterate all other static and dynamic env vars separately, skipping the `PATH` key
+
+Resolution order for the spawned process is now:
+
+```
+env_clear()
+  -> PATH = [dynamic PATH prepend] + [static PATH prepend] + [restricted base]
+  -> all other static env vars
+  -> all other dynamic env vars (resolved at call time)
+```
+
+### Use Cases Unlocked
+
+- **PostgreSQL on RHEL**: `psql` at `/usr/pgsql-16/bin/psql` is now reachable when the command factory calls `set_env("PATH", "/usr/pgsql-16/bin:/usr/pgsql-15/bin:/usr/pgsql-14/bin:...")`. The extended PATH is merged with the base, so both vendor tools and system utilities remain on the search path.
+- **Any vendor-installed tool** that lives outside `/usr/bin`, `/bin`, `/usr/sbin`, or `/sbin` can now be reached by extending PATH rather than overriding it.
+
+### Files Modified
+
+| File | Crate | Changes |
+|------|-------|---------|
+| `command_executor.rs` | execution_engine | `execute()` — replaced single `.env("PATH", ...)` + `.envs(&static_env)` + `.envs(&dynamic_resolved)` with explicit PATH merging (prepend static, then prepend dynamic, then apply once) followed by per-key iteration that skips the PATH key. Behavior for non-PATH env vars is unchanged. |
+
+### Backward Compatibility
+
+Fully backward compatible. Executors that do not call `set_env("PATH", ...)` or `set_env_from("PATH", ...)` behave identically to v1.2.2 — they receive the same restricted base PATH.
+
+Executors that previously called `set_env("PATH", ...)` expecting their value to replace the base will now see the base **appended** to their value. If a caller actually needs to fully replace the base PATH, that is a new API request (not covered by this release).
+
+---
+
 ## [1.2.2] — 2026-04-09
 
 ### Added

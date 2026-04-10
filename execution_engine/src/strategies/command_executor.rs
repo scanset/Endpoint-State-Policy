@@ -133,16 +133,37 @@ impl SystemCommandExecutor {
         // Resolve dynamic env vars from the agent's current environment
         let dynamic_resolved = self.resolve_dynamic_env();
 
+        // Build final PATH: start with base, prepend static PATH if set,
+        // then prepend dynamic PATH if set
+        let base_path = "/usr/bin:/bin:/usr/sbin:/sbin";
+        let mut final_path = base_path.to_string();
+        if let Some(static_path) = self.static_env.get("PATH") {
+            final_path = format!("{}:{}", static_path, base_path);
+        }
+        if let Some(dynamic_path) = dynamic_resolved.get("PATH") {
+            final_path = format!("{}:{}", dynamic_path, final_path);
+        }
+
         // Build command with sanitized environment
         let mut cmd = Command::new(program);
         cmd.args(args)
             .env_clear() // Clear environment for security
-            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin") // Restricted PATH
-            .envs(&self.static_env) // Static vars (fixed at config time)
-            .envs(&dynamic_resolved) // Dynamic vars (resolved just now)
+            .env("PATH", &final_path) // Merged PATH
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        // Inject non-PATH env vars
+        for (k, v) in &self.static_env {
+            if k != "PATH" {
+                cmd.env(k, v);
+            }
+        }
+        for (k, v) in &dynamic_resolved {
+            if k != "PATH" {
+                cmd.env(k, v);
+            }
+        }
 
         // Spawn process
         let mut child = cmd.spawn().map_err(|e| {
