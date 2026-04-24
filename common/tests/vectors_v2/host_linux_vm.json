@@ -1,0 +1,10 @@
+{
+  "host_type": "linux.vm",
+  "host_id": "linux-1d04e62ff4fd4b30923476e894fb3553",
+  "hostname": "rhel9-test.local",
+  "os": "linux",
+  "arch": "x86_64",
+  "attrs": {
+    "kernel": "5.14.0-611.41.1.el9_7.x86_64"
+  }
+}

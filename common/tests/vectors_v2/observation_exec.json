@@ -1,0 +1,15 @@
+{
+  "uuid": "1c3f6d1b-8e2f-4c3a-a5d6-9f2b3e4c5d6f",
+  "host_ref": {
+    "host_type": "linux.vm",
+    "host_id": "linux-1d04e62ff4fd4b30923476e894fb3553"
+  },
+  "collected_at": "2026-04-20T12:35:01.000Z",
+  "method": {
+    "kind": "exec",
+    "params": {
+      "argv": ["sysctl", "-n", "kernel.randomize_va_space"]
+    }
+  },
+  "content_hash": "sha256:abc1230000000000000000000000000000000000000000000000000000000000"
+}

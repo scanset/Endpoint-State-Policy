@@ -148,8 +148,9 @@ pub struct CollectionRecord {
     /// Collection method details for assessor traceability
     ///
     /// Contains information about exactly how the evidence was gathered,
-    /// including the method type, target, and (with `assessor-evidence` feature)
-    /// the exact command and input parameters used.
+    /// including the method type, target, and (when populated) the exact
+    /// command and input parameters used. As of v2.0.0 command+inputs are
+    /// always serialized when present — no feature gating.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<CollectionMethod>,
 }
@@ -282,7 +283,7 @@ pub struct CollectionSummary {
     /// Collection method type (if available)
     ///
     /// Provides the method type without sensitive details.
-    /// Full method details are only in CollectionRecord with assessor-evidence.
+    /// Full method details live on `CollectionRecord`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method_type: Option<String>,
 }

@@ -6,19 +6,22 @@
 //!
 //! ## Schema Reference
 //!
-//! Implements Sections 3.2-3.6 of ESP v1.1.0 Canonical Execution Schema.
+//! Implements Sections 3.2-3.6 and 4 of ESP v2.0.0 Canonical Execution Schema
+//! (`docs/09_ESP_Canonical_Schema_v2_0_0.md`).
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use super::identity_status::IdentityStatus;
+use super::observation::Observation;
 use super::transparency::TransparencyProof;
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-/// Current schema version
-pub const SCHEMA_VERSION: &str = "1.2.0";
+/// Current schema version (v2.0.0 per `09_ESP_Canonical_Schema_v2_0_0.md`).
+pub const SCHEMA_VERSION: &str = "2.0.0";
 
 // ============================================================================
 // ResultEnvelope
@@ -75,6 +78,21 @@ pub struct ResultEnvelope {
     /// Indicates whether PKI identity was established and provides
     /// diagnostic information if bootstrap failed.
     pub identity_status: IdentityStatus,
+
+    /// Observations collected during this scan (v2.0.0).
+    ///
+    /// Evidence is a first-class top-level entity: each observation carries
+    /// a stable uuid for the lifetime of this envelope, plus a `content_hash`
+    /// over its body. Policies reference observations by uuid via
+    /// `PolicyResult.observation_refs[]`; the same observation can be cited
+    /// by many policies without duplication.
+    ///
+    /// In `attestation` output mode, observation bodies are stripped; the
+    /// `content_hash` is preserved so the reference chain stays intact.
+    ///
+    /// See Section 4 of `09_ESP_Canonical_Schema_v2_0_0.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observations: Vec<Observation>,
 }
 
 impl ResultEnvelope {
@@ -94,6 +112,7 @@ impl ResultEnvelope {
             replay_hash: String::new(),
             signature: None,
             identity_status: IdentityStatus::default(),
+            observations: Vec::new(),
         }
     }
 
@@ -114,7 +133,26 @@ impl ResultEnvelope {
             replay_hash: String::new(),
             signature: None,
             identity_status,
+            observations: Vec::new(),
         }
+    }
+
+    /// Record an observation into this envelope and return a reference to it
+    /// suitable for `PolicyResult.observation_refs`.
+    pub fn record_observation(
+        &mut self,
+        obs: Observation,
+    ) -> super::observation::ObservationRef {
+        let r = obs.as_ref();
+        self.observations.push(obs);
+        r
+    }
+
+    /// Replace the observations array wholesale. Useful for builders that
+    /// construct observations before the envelope.
+    pub fn with_observations(mut self, observations: Vec<Observation>) -> Self {
+        self.observations = observations;
+        self
     }
 
     /// Set the result ID
@@ -465,65 +503,172 @@ impl Default for AgentInfo {
 // HostInfo
 // ============================================================================
 
-/// Information about the host where the scan executed
+/// Information about the host that was scanned (v2.0.0, polymorphic).
+///
+/// `host_type` is a free-form dotted discriminator (`<provider>.<kind>`,
+/// e.g. `linux.vm`, `azure.vm`, `aws.account`, `m365.tenant`,
+/// `entra.tenant`, `k8s.cluster`). `host_id` is stable within that type.
+/// The VM-shape fields (`hostname`, `os`, `arch`) are optional and present
+/// only for host types where they're meaningful. `attrs` carries
+/// host-type-specific structured data and is where provider-specific
+/// identifiers (subscription_id, account_id, tenant_id, etc.) live.
+///
+/// See Section 3.4 of `docs/09_ESP_Canonical_Schema_v2_0_0.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostInfo {
-    /// Host identifier
-    pub id: String,
+    /// Dotted `<provider>.<kind>` discriminator. Free-form; see the
+    /// non-normative registry in schema Section 3.4.4.
+    pub host_type: String,
 
-    /// Hostname
-    pub hostname: String,
+    /// Stable identifier within `host_type`. `(host_type, host_id)` is
+    /// the uniqueness key.
+    pub host_id: String,
 
-    /// Operating system
-    pub os: String,
+    /// Hostname. Present for VM-like host types; omitted for accounts /
+    /// tenants where it has no meaning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
 
-    /// Architecture
-    pub arch: String,
+    /// Operating system (`linux`, `windows`, `macos`). VM-like host
+    /// types only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
 
-    /// Fully qualified domain name (optional)
+    /// Architecture (`x86_64`, `aarch64`, ...). VM-like host types only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+
+    /// Host-type-specific structured attributes (subscription_id,
+    /// account_id, tenant_id, region, etc.). BTreeMap for deterministic
+    /// serialization order.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attrs: BTreeMap<String, serde_json::Value>,
+
+    /// Fully qualified domain name (optional; VM-like hosts only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fqdn: Option<String>,
 }
 
 impl HostInfo {
-    /// Create new host info
+    /// Create a HostInfo with an explicit polymorphic host type.
+    ///
+    /// This is the canonical v2.0.0 constructor. Use `::vm_like()` or
+    /// `::new()` for VM-shape convenience.
+    pub fn for_host_type(
+        host_type: impl Into<String>,
+        host_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            host_type: host_type.into(),
+            host_id: host_id.into(),
+            hostname: None,
+            os: None,
+            arch: None,
+            attrs: BTreeMap::new(),
+            fqdn: None,
+        }
+    }
+
+    /// Create a VM-shaped HostInfo. Legacy signature, kept for
+    /// backward-compatible callsites. `host_type` is inferred from
+    /// `os` (`linux` -> `linux.vm`, `windows` -> `windows.vm`,
+    /// `macos` -> `macos.vm`, anything else -> `<os>.vm`).
     pub fn new(
         id: impl Into<String>,
         hostname: impl Into<String>,
         os: impl Into<String>,
         arch: impl Into<String>,
     ) -> Self {
+        let os_s = os.into();
+        let host_type = host_type_from_os(&os_s);
         Self {
-            id: id.into(),
-            hostname: hostname.into(),
-            os: os.into(),
-            arch: arch.into(),
+            host_type,
+            host_id: id.into(),
+            hostname: Some(hostname.into()),
+            os: Some(os_s),
+            arch: Some(arch.into()),
+            attrs: BTreeMap::new(),
             fqdn: None,
         }
     }
 
-    /// Create from system information
+    /// Create from system information (VM-shape).
     pub fn from_system() -> Self {
         let hostname = std::env::var("HOSTNAME")
             .or_else(|_| std::env::var("COMPUTERNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
 
-        // Generate a simple host ID from hostname
-        let id = format!("host-{:x}", simple_hash(&hostname));
+        let os = std::env::consts::OS.to_string();
+        let arch = std::env::consts::ARCH.to_string();
+
+        // Generate a simple host ID from hostname.
+        let host_id = format!("host-{:x}", simple_hash(&hostname));
+        let host_type = host_type_from_os(&os);
 
         Self {
-            id,
-            hostname,
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
+            host_type,
+            host_id,
+            hostname: Some(hostname),
+            os: Some(os),
+            arch: Some(arch),
+            attrs: BTreeMap::new(),
             fqdn: None,
         }
     }
 
-    /// Set FQDN
+    /// Back-compat accessor for the v1.x `id` field name.
+    pub fn id(&self) -> &str {
+        &self.host_id
+    }
+
+    /// Set hostname.
+    pub fn with_hostname(mut self, hostname: impl Into<String>) -> Self {
+        self.hostname = Some(hostname.into());
+        self
+    }
+
+    /// Set OS.
+    pub fn with_os(mut self, os: impl Into<String>) -> Self {
+        self.os = Some(os.into());
+        self
+    }
+
+    /// Set architecture.
+    pub fn with_arch(mut self, arch: impl Into<String>) -> Self {
+        self.arch = Some(arch.into());
+        self
+    }
+
+    /// Add a single attribute.
+    pub fn with_attr(
+        mut self,
+        key: impl Into<String>,
+        value: serde_json::Value,
+    ) -> Self {
+        self.attrs.insert(key.into(), value);
+        self
+    }
+
+    /// Set FQDN.
     pub fn with_fqdn(mut self, fqdn: impl Into<String>) -> Self {
         self.fqdn = Some(fqdn.into());
         self
+    }
+
+    /// Produce an observation HostRef pointing at this host.
+    pub fn as_ref(&self) -> super::observation::HostRef {
+        super::observation::HostRef::new(&self.host_type, &self.host_id)
+    }
+}
+
+/// Infer a VM-shape `host_type` from an OS string.
+fn host_type_from_os(os: &str) -> String {
+    match os {
+        "linux" => "linux.vm".to_string(),
+        "windows" => "windows.vm".to_string(),
+        "macos" => "macos.vm".to_string(),
+        other if !other.is_empty() => format!("{}.vm", other),
+        _ => "unknown.vm".to_string(),
     }
 }
 
@@ -585,7 +730,7 @@ mod tests {
         let envelope = ResultEnvelope::new(agent, host);
 
         assert!(envelope.result_id.starts_with("esp-result-"));
-        assert_eq!(envelope.schema_version, "1.2.0");
+        assert_eq!(envelope.schema_version, "2.0.0");
         assert!(!envelope.is_signed());
         assert!(!envelope.is_identity_bootstrapped());
     }
@@ -631,9 +776,10 @@ mod tests {
     fn test_host_info_from_system() {
         let host = HostInfo::from_system();
 
-        assert!(!host.id.is_empty());
-        assert!(!host.os.is_empty());
-        assert!(!host.arch.is_empty());
+        assert!(!host.host_id.is_empty());
+        assert!(!host.host_type.is_empty());
+        assert!(host.os.as_deref().map_or(false, |s| !s.is_empty()));
+        assert!(host.arch.as_deref().map_or(false, |s| !s.is_empty()));
     }
 
     #[test]
@@ -745,7 +891,7 @@ mod tests {
 
         let json = serde_json::to_string_pretty(&envelope).unwrap();
 
-        assert!(json.contains("\"schema_version\": \"1.2.0\""));
+        assert!(json.contains("\"schema_version\": \"2.0.0\""));
         assert!(json.contains("\"identity_status\":"));
         assert!(json.contains("\"bootstrapped\": true"));
         assert!(json.contains("\"signer_id\": \"scanset://test\""));
@@ -755,7 +901,7 @@ mod tests {
         assert!(!json.contains("\"signature\":"));
 
         let parsed: ResultEnvelope = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.schema_version, "1.2.0");
+        assert_eq!(parsed.schema_version, "2.0.0");
         assert!(parsed.identity_status.is_bootstrapped());
         assert_eq!(parsed.replay_hash, "sha256:replay123");
     }
@@ -813,6 +959,76 @@ mod tests {
 
     #[test]
     fn test_schema_version_constant() {
-        assert_eq!(SCHEMA_VERSION, "1.2.0");
+        assert_eq!(SCHEMA_VERSION, "2.0.0");
+    }
+
+    #[test]
+    fn test_host_info_polymorphic_constructors() {
+        // Legacy VM-shape constructor infers host_type from os.
+        let h = HostInfo::new("host-abc", "server01", "linux", "x86_64");
+        assert_eq!(h.host_type, "linux.vm");
+        assert_eq!(h.host_id, "host-abc");
+        assert_eq!(h.hostname.as_deref(), Some("server01"));
+
+        // Canonical v2 constructor.
+        let az = HostInfo::for_host_type("azure.vm", "vm-prooflayer-demo")
+            .with_attr(
+                "subscription_id",
+                serde_json::Value::String("2f3a8603-...".into()),
+            )
+            .with_attr(
+                "resource_group",
+                serde_json::Value::String("rg-prooflayer-demo-eastus".into()),
+            );
+        assert_eq!(az.host_type, "azure.vm");
+        assert_eq!(az.attrs.len(), 2);
+        assert!(az.hostname.is_none());
+
+        // Non-VM host type: tenant.
+        let tenant = HostInfo::for_host_type("m365.tenant", "00000000-tenant-guid")
+            .with_attr(
+                "domain",
+                serde_json::Value::String("contoso.onmicrosoft.com".into()),
+            );
+        assert_eq!(tenant.host_type, "m365.tenant");
+        assert!(tenant.os.is_none());
+        assert!(tenant.arch.is_none());
+    }
+
+    #[test]
+    fn test_host_info_serializes_optional_fields() {
+        let tenant = HostInfo::for_host_type("entra.tenant", "tenant-guid");
+        let json = serde_json::to_string(&tenant).unwrap();
+
+        // Absent VM fields must be omitted, not serialized as null.
+        assert!(!json.contains("\"hostname\""));
+        assert!(!json.contains("\"os\""));
+        assert!(!json.contains("\"arch\""));
+        assert!(!json.contains("\"attrs\""));
+        assert!(json.contains("\"host_type\":\"entra.tenant\""));
+        assert!(json.contains("\"host_id\":\"tenant-guid\""));
+    }
+
+    #[test]
+    fn test_envelope_observations_default_empty() {
+        let env = ResultEnvelope::default();
+        assert!(env.observations.is_empty());
+        let json = serde_json::to_string(&env).unwrap();
+        // Empty observations array elided from output.
+        assert!(!json.contains("\"observations\""));
+    }
+
+    #[test]
+    fn test_envelope_record_observation() {
+        use super::super::observation::{HostRef, Observation, ObservationMethod};
+
+        let mut env = ResultEnvelope::default();
+        let r = env.record_observation(Observation::new(
+            HostRef::new("linux.vm", "host-abc"),
+            ObservationMethod::file_read("/etc/os-release"),
+            "sha256:deadbeef",
+        ));
+        assert_eq!(env.observations.len(), 1);
+        assert_eq!(env.observations[0].uuid, r.uuid);
     }
 }

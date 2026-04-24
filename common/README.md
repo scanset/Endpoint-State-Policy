@@ -22,10 +22,10 @@ This crate provides the foundational types used across the ESP toolchain: AST no
 │  ┌───────────────────────────────────┐  ┌──────────┐            │
 │  │            results                │  │ metadata │            │
 │  │                                   │  │          │            │
-│  │ Attestation │ FullResult │Assessor│  │MetaData  │            │
-│  │ Evidence    │ Finding    │Package │  │Block     │            │
-│  │ Collection  │ Envelope   │        │  │          │            │
-│  │ Method      │ crypto     │        │  │          │            │
+│  │ AssessorPackage │ Observation     │  │MetaData  │            │
+│  │ Evidence        │ Finding         │  │Block     │            │
+│  │ Envelope        │ crypto          │  │          │            │
+│  │ CollectionMethod│ IdentityStatus  │  │          │            │
 │  └───────────────────────────────────┘  └──────────┘            │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -37,13 +37,11 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 common = { path = "../common" }
-
-# With full results support
-common = { path = "../common", features = ["full-results"] }
-
-# With assessor evidence support
-common = { path = "../common", features = ["assessor-evidence"] }
 ```
+
+As of v2.0.0 there are no Cargo feature gates on the `results` module — the
+`AssessorPackage` envelope is the only output shape and is always compiled in.
+
 
 ## Quick Start
 
@@ -193,88 +191,62 @@ Key types: `compile_time::*` constants, `RuntimeConfig`, `LoggingPreferences`
 
 ### results
 
-Scan result types with feature-gated output modes for different security contexts.
+Scan result types. As of v2.0.0 the crate emits exactly one output shape:
+`AssessorPackage`. The previous `attestation` / `full-results` /
+`assessor-evidence` feature matrix has been removed — the assessor shape
+is already a superset of the others.
 
 #### Architecture
 
 ```
 ExecutionManifest (from execution_engine)
     │
-    ▼ ResultBuilder
+    ▼ ResultBuilder::build_assessor_package
     │
-┌───┴───────────────────────────────────────────┐
-│                                               │
-▼                                               ▼
-AttestationResult                          FullResult
-(feature: attestation)                     (feature: full-results)
-│                                               │
-├── envelope (with signature block)            ├── envelope
-├── summary                                    ├── summary
-└── checks[]                                   └── policies[]
-    ├── identity                                   ├── identity
-    ├── outcome                                    ├── outcome
-    └── weight                                     ├── weight
-                                                   ├── findings[]
-                                                   └── evidence
+    ▼
+AssessorPackage
+    ├── envelope (ResultEnvelope)
+    │   ├── host              (polymorphic HostInfo)
+    │   ├── observations[]    (first-class evidence)
+    │   ├── identity_status   (PKI bootstrap status)
+    │   └── signature         (certificate_chain + transparency)
+    ├── summary
+    └── policies[]
+        ├── identity
+        ├── outcome
+        ├── weight
+        ├── findings[]
+        └── observation_refs[]
 ```
 
-#### Content Matrix
-
-| Content              | Attestation | Full Results | Assessor Evidence |
-|----------------------|-------------|--------------|-------------------|
-| Policy ID            | ✓           | ✓            | ✓                 |
-| Outcome              | ✓           | ✓            | ✓                 |
-| Criticality          | ✓           | ✓            | ✓                 |
-| Control mappings     | ✓           | ✓            | ✓                 |
-| Weight               | ✓           | ✓            | ✓                 |
-| Evidence hash        | ✓           | ✓            | ✓                 |
-| Host ID              | ✓           | ✓            | ✓                 |
-| Findings             | ✗           | ✓            | ✓                 |
-| Evidence data        | ✗           | ✓            | ✓                 |
-| Collection method    | ✗           | ✓            | ✓                 |
-| Collection target    | ✗           | ✓            | ✓                 |
-| Collection command   | ✗           | ✗            | ✓                 |
-| Collection inputs    | ✗           | ✗            | ✓                 |
-
-#### Usage Examples
-
-**Building Attestations:**
+#### Usage
 
 ```rust
-use common::results::{ResultBuilder, CheckInput, Criticality, Outcome};
+use common::results::{
+    ResultBuilder, AssessorInput, Criticality, Outcome, IdentityStatus,
+};
 
-let builder = ResultBuilder::from_system("agent-001");
-
-let checks = vec![
-    CheckInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass),
-    CheckInput::new("policy-2", "linux", Criticality::Medium, vec![], Outcome::Fail),
-];
-
-let attestation = builder.build_attestation(checks, None)?;
-```
-
-**Building Full Results:**
-
-```rust
-use common::results::{ResultBuilder, PolicyInput, Criticality, Outcome};
-
-let builder = ResultBuilder::from_system("agent-001");
+let builder = ResultBuilder::from_system("esp-agent");
+let identity_status = IdentityStatus::disabled("unsigned:agent:host-abc");
 
 let policies = vec![
-    PolicyInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass)
+    AssessorInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass)
         .with_findings(findings)
         .with_evidence(evidence),
 ];
 
-let full_result = builder.build_full_result(policies)?;
+let package = builder.build_assessor_package(
+    policies,
+    manifest.replay_hash,
+    identity_status,
+)?;
 ```
 
-Key types (always available): `Outcome`, `Criticality`, `Weight`, `CriteriaCounts`, `ResultCounts`, `ControlMapping`, `PolicyIdentity`, `ResultEnvelope`, `Evidence`, `CollectionMethod`, `ComplianceFinding`, `ResultBuilder`
-
-Feature-gated types:
-- `attestation`: `AttestationResult`, `CheckAttestation`, `AttestationBuilder`, `CheckInput`
-- `full-results`: `FullResult`, `PolicyResult`, `FullResultBuilder`, `PolicyInput`
-- `assessor-evidence`: `AssessorPackage`, `AssessorPolicyResult`, `CollectionCommand`, `ReproducibilityInfo`
+Key types: `Outcome`, `Criticality`, `Weight`, `CriteriaCounts`, `ResultCounts`,
+`ControlMapping`, `PolicyIdentity`, `ResultEnvelope`, `Evidence`, `Observation`,
+`CollectionMethod`, `ComplianceFinding`, `IdentityStatus`, `ResultBuilder`,
+`AssessorInput`, `AssessorPackage`, `AssessorPolicyResult`, `CollectionCommand`,
+`ReproducibilityInfo`.
 
 ---
 
@@ -428,26 +400,10 @@ use common::results::{hash_content, sha256_hash, hex_encode, hex_decode};
 
 ## Feature Flags
 
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `attestation` | ✅ | Network-safe result types (CUI-free) |
-| `full-results` | ❌ | Complete results with evidence (local storage) |
-| `assessor-evidence` | ❌ | Full results with collection commands (implies full-results) |
-
-Note: Core types (`Outcome`, `Criticality`, `CollectionMethod`, `Evidence`, crypto functions) are always available regardless of feature flags.
-
-Enable features in `Cargo.toml`:
-
-```toml
-# Attestation only (default)
-common = { path = "../common" }
-
-# Full results with evidence
-common = { path = "../common", features = ["full-results"] }
-
-# Assessor package with reproducibility info
-common = { path = "../common", features = ["assessor-evidence"] }
-```
+None. As of v2.0.0 the `results` module has no Cargo features — the
+`AssessorPackage` envelope is the only output shape and is always compiled in.
+See `CHANGELOG [2.0.0]` for the rationale behind removing the previous
+`attestation` / `full-results` / `assessor-evidence` matrix.
 
 ## Platform Support
 
@@ -485,7 +441,7 @@ common/
 │   │   ├── constants.rs # Compile-time limits
 │   │   └── runtime.rs   # Runtime preferences
 │   ├── results/
-│   │   ├── mod.rs               # Feature-gated exports
+│   │   ├── mod.rs               # Re-exports (unconditional)
 │   │   ├── error.rs             # ResultError type
 │   │   ├── common/              # Shared types (Outcome, Criticality, etc.)
 │   │   ├── collection_method.rs # CollectionMethod for traceability
@@ -493,16 +449,17 @@ common/
 │   │   ├── evidence.rs          # Evidence, CollectionRecord
 │   │   ├── finding.rs           # ComplianceFinding, FindingBuilder
 │   │   ├── identity.rs          # PolicyIdentity
+│   │   ├── identity_status.rs   # IdentityStatus (PKI bootstrap state)
+│   │   ├── observation.rs       # Observation, ObservationRef (v2.0.0)
 │   │   ├── summary.rs           # ScanSummary, ExecutionSummary
-│   │   ├── builder.rs           # ResultBuilder
-│   │   ├── crypto/              # FIPS 140-3 compliant hashing
-│   │   │   ├── mod.rs           # Platform-agnostic interface
-│   │   │   ├── canonical.rs     # Canonical JSON serialization
-│   │   │   ├── openssl.rs       # Linux/Unix backend
-│   │   │   └── windows.rs       # Windows CNG backend
-│   │   ├── attestation/         # Network-safe output (feature: attestation)
-│   │   ├── full/                # Complete results (feature: full-results)
-│   │   └── assessor/            # Assessor packages (feature: assessor-evidence)
+│   │   ├── transparency.rs      # TransparencyProof, InclusionProof
+│   │   ├── builder.rs           # ResultBuilder + AssessorInput
+│   │   ├── assessor.rs          # AssessorPackage + AssessorPackageBuilder
+│   │   └── crypto/              # FIPS 140-3 compliant hashing
+│   │       ├── mod.rs           # Platform-agnostic interface
+│   │       ├── canonical.rs     # Canonical JSON serialization
+│   │       ├── openssl.rs       # Linux/Unix backend
+│   │       └── windows.rs       # Windows CNG backend
 │   └── metadata.rs              # MetaDataBlock
 └── README.md
 ```

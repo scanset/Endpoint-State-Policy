@@ -1,0 +1,17 @@
+{
+  "host_type": "azure.vm",
+  "host_id": "vm-prooflayer-demo",
+  "hostname": "vm-prooflayer-demo",
+  "os": "linux",
+  "arch": "x86_64",
+  "attrs": {
+    "bastion_name": "bas-prooflayer-demo",
+    "local_port": 50022,
+    "remote_port": 22,
+    "resource_group": "rg-prooflayer-demo-eastus",
+    "ssh_user": "azureuser",
+    "subscription_id": "2f3a8603-9425-446b-8fa4-09bb61becdcc",
+    "target_resource_id": "/subscriptions/2f3a8603-9425-446b-8fa4-09bb61becdcc/resourceGroups/rg-prooflayer-demo-eastus/providers/Microsoft.Compute/virtualMachines/vm-prooflayer-demo",
+    "transport": "az_bastion_tunnel"
+  }
+}

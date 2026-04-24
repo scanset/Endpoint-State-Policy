@@ -478,14 +478,31 @@ impl ExecutionEngine {
             .get_ctn_contract(&ctn_result.criterion_type)
             .ok();
 
-        // Get collector_id from the collected data (runtime provenance)
-        let collector_id = ctn_result
-            .execution_result
-            .collected_data
-            .values()
-            .next()
-            .map(|d| d.metadata.collector_id.clone())
-            .unwrap_or_else(|| "unknown".to_string());
+        // Source collector_id from the static registry, NOT from
+        // `collected_data.values().next()`. The latter iterates a HashMap whose
+        // order is nondeterministic across runs — for a CTN type served by
+        // multiple collectors (or just to stabilize hashing in general), this
+        // would cause `replay_hash` to flip between otherwise-identical runs,
+        // violating the "same policy + same posture = same hash" guarantee.
+        //
+        // `get_collector_for_ctn` deterministically picks the registered
+        // collector that declares support for this ctn_type. We fall back to
+        // the runtime provenance path only if the registry lookup fails
+        // (shouldn't happen in practice — we wouldn't have collected data at
+        // all without a registered collector).
+        let collector_id = self
+            .registry
+            .get_collector_for_ctn(&ctn_result.criterion_type)
+            .map(|c| c.collector_id().to_string())
+            .unwrap_or_else(|_| {
+                ctn_result
+                    .execution_result
+                    .collected_data
+                    .values()
+                    .next()
+                    .map(|d| d.metadata.collector_id.clone())
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
 
         match contract_info {
             Some(contract) => {

@@ -1,0 +1,10 @@
+{
+  "host_type": "linux.vm",
+  "host_id": "ssh://operator@10.0.0.42:22",
+  "os": "linux",
+  "attrs": {
+    "ssh_host": "10.0.0.42",
+    "ssh_port": 22,
+    "ssh_user": "operator"
+  }
+}

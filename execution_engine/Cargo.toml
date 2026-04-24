@@ -14,7 +14,7 @@ crate-type = ["lib", "cdylib"]
 
 [dependencies]
 # Workspace dependency on common
-common = { workspace = true, features = ["attestation", "full-results"] }
+common = { workspace = true }
 
 # Use workspace dependencies where applicable
 serde.workspace = true

@@ -1,0 +1,19 @@
+{
+  "uuid": "0b2e5c0a-7d1e-4b2f-9c4e-8f1a2d3b4c5e",
+  "host_ref": {
+    "host_type": "azure.vm",
+    "host_id": "vm-prooflayer-demo"
+  },
+  "collected_at": "2026-04-20T12:34:56.789Z",
+  "method": {
+    "kind": "file_read",
+    "params": {
+      "path": "/etc/os-release"
+    }
+  },
+  "content_hash": "sha256:3a7bd3e2360a3d291caf4a3e84d99b7c4c5e6f7a8b9c0d1e2f3a4b5c6d7e8f90",
+  "body": {
+    "bytes_base64": "TkFNRT0iUm9ja3kgTGludXgi",
+    "encoding": "utf-8"
+  }
+}

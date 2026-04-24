@@ -24,6 +24,7 @@
 //!
 //! ```
 
+pub mod channel;
 pub mod command_executor;
 pub mod ctn_contract;
 pub mod errors;
@@ -59,6 +60,8 @@ pub use traits::{
 pub use validation::{CtnCompatibilityChecker, CtnContractValidator};
 
 pub use command_executor::{CommandError, CommandOutput, SystemCommandExecutor};
+
+pub use channel::{Channel, ChannelError, LocalChannel, OsFamily, SharedChannel};
 
 // ============================================================================
 // Module-level convenience functions

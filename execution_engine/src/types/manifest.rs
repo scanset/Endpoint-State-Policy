@@ -1,7 +1,7 @@
 //! Execution Manifest Types
 //!
 //! The `ExecutionManifest` is the complete output of policy execution, containing
-//! all data needed to build any output format (attestation, full-results, assessor-evidence).
+//! all data needed to build the `AssessorPackage` output envelope.
 //!
 //! ## Architecture
 //!
@@ -18,20 +18,17 @@
 //!             ↓ Output builders USE this hash, never recompute ↓
 //!
 //! ResultBuilder::from_manifest(manifest)
-//!     ├── .build_attestation()      → uses manifest.replay_hash
-//!     ├── .build_full_results()     → uses manifest.replay_hash
-//!     └── .build_assessor_results() → uses manifest.replay_hash
+//!     └── .build_assessor_package() → uses manifest.replay_hash
 //! ```
 //!
 //! ## Replay Hash
 //!
-//! The `replay_hash` is computed ONCE during execution and included in all
-//! output formats. It captures intent + contract + outcome in a three-layer
-//! structure, rolled up through the CRI tree. This ensures:
+//! The `replay_hash` is computed ONCE during execution and included in the
+//! emitted `AssessorPackage`. It captures intent + contract + outcome in a
+//! three-layer structure, rolled up through the CRI tree. This ensures:
 //!
-//! - Attestations can be verified against full results
-//! - Assessor packages can be linked to attestations
-//! - SIEM/SOAR can trust attestation hashes
+//! - Envelopes can be verified by recomputing the hash from the manifest
+//! - SIEM/SOAR can trust the envelope hash as a stable identifier
 //! - Hash is stable when compliance posture is unchanged
 
 use crate::strategies::{CollectedData, CtnExecutionResult};
@@ -199,14 +196,13 @@ pub fn is_known_meta_field(field_name: &str) -> bool {
 /// ## Replay Hash
 ///
 /// The `replay_hash` field is computed ONCE during execution and must be
-/// used by all output builders. It captures intent + contract + outcome
-/// rolled up through the CRI tree, ensuring hash consistency across all
-/// output formats.
+/// used by the output builder. It captures intent + contract + outcome
+/// rolled up through the CRI tree.
 ///
 /// ```rust,ignore
-/// // In output builders - USE the hash, don't recompute!
-/// fn build_attestation(manifest: &ExecutionManifest) -> Attestation {
-///     Attestation {
+/// // In the output builder - USE the hash, don't recompute!
+/// fn build_assessor(manifest: &ExecutionManifest) -> AssessorPackage {
+///     AssessorPackage {
 ///         replay_hash: manifest.replay_hash.clone(), // USE
 ///         // ...
 ///     }

@@ -215,8 +215,8 @@ pub struct CollectionMetadata {
     /// Collection method details for assessor traceability
     ///
     /// Documents exactly how evidence was collected, including method type,
-    /// target resource, and optionally the exact command or API call and
-    /// input parameters (when assessor-evidence feature is enabled in common).
+    /// target resource, and (when populated) the exact command or API call
+    /// plus input parameters. As of v2.0.0 these are always serialized.
     pub method: Option<CollectionMethod>,
 }
 

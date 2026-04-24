@@ -4,120 +4,74 @@
 //!
 //! ## Architecture
 //!
+//! As of v2.0.0 there is **one** output type: `AssessorPackage`. Attestation
+//! and full-results variants (and the corresponding Cargo features) have
+//! been removed — the assessor shape is already a superset, and maintaining
+//! three formats in parallel cost more than it delivered.
+//!
 //! ```text
 //! ExecutionManifest (from execution_engine)
 //!     │
 //!     ▼ ResultBuilder
 //!     │
-//! ┌───┴───────────────────────────────────────────┐
-//! │                                               │
-//! ▼                                               ▼
-//! AttestationResult                          FullResult
-//! (feature: attestation)                     (feature: full-results)
-//! │                                               │
-//! ├── envelope (with signature block)            ├── envelope
-//! │   ├── identity_status                        │   ├── identity_status
-//! │   └── signature                              │   └── signature
-//! │       ├── certificate_chain                  │       ├── certificate_chain
-//! │       └── transparency                       │       └── transparency
-//! ├── summary                                    ├── summary
-//! └── checks[]                                   └── policies[]
-//!     ├── identity                                   ├── identity
-//!     ├── outcome                                    ├── outcome
-//!     └── weight                                     ├── weight
-//!                                                    ├── findings[]
-//!                                                    └── evidence
+//!     ▼
+//! AssessorPackage
+//!     ├── envelope (ResultEnvelope)
+//!     │   ├── host              (polymorphic HostInfo, v2.0.0)
+//!     │   ├── observations[]    (first-class evidence, v2.0.0)
+//!     │   ├── identity_status
+//!     │   └── signature
+//!     │       ├── certificate_chain
+//!     │       └── transparency
+//!     ├── summary
+//!     └── policies[]
+//!         ├── identity
+//!         ├── outcome
+//!         ├── weight
+//!         ├── findings[]
+//!         └── observation_refs[]
 //! ```
-//!
-//! ## Features
-//!
-//! - `attestation` (default) - CUI-free results for SaaS/network transport
-//! - `full-results` - Complete results with evidence (local storage only)
-//! - `assessor-evidence` - Full results with collection commands (implies full-results)
 //!
 //! ## Schema Version
 //!
-//! This module implements ESP v1.1.0 Canonical Execution Schema, which includes:
+//! This module implements ESP v2.0.0 Canonical Execution Schema
+//! (`docs/09_ESP_Canonical_Schema_v2_0_0.md`). Key structural points:
+//! - Polymorphic `HostInfo` with free-string `host_type` discriminator
+//! - Top-level `observations[]` on `ResultEnvelope` (evidence as entity)
+//! - `PolicyResult.observation_refs[]` replaces inline per-policy `evidence`
+//!   (the `evidence` field is retained on `PolicyResult` for the v1.x->v2.x
+//!   transition window and will be removed in a follow-up release)
 //! - `identity_status` in envelope (required) - PKI bootstrap status
-//! - `transparency` in signature block (optional) - Certificate transparency proof
+//! - `transparency` in signature block (optional) - CT proof
 //!
 //! ## Hash Architecture
 //!
-//! All output formats use pre-computed hashes from `ExecutionManifest`. The hashes
-//! are computed ONCE during execution and passed through unchanged to ensure
-//! consistency across all output formats.
-//!
-//! ## Content Matrix
-//!
-//! | Content              | Attestation | Full Results | Assessor Evidence |
-//! |----------------------|-------------|--------------|-------------------|
-//! | Policy ID            | ✓           | ✓            | ✓                 |
-//! | Outcome              | ✓           | ✓            | ✓                 |
-//! | Criticality          | ✓           | ✓            | ✓                 |
-//! | Control mappings     | ✓           | ✓            | ✓                 |
-//! | Weight               | ✓           | ✓            | ✓                 |
-//! | Evidence hash        | ✓           | ✓            | ✓                 |
-//! | Content hash         | ✓           | ✓            | ✓                 |
-//! | Host ID              | ✓           | ✓            | ✓                 |
-//! | Identity status      | ✓           | ✓            | ✓                 |
-//! | Signature            | ✓           | ✓            | ✓                 |
-//! | Transparency proof   | ✓           | ✓            | ✓                 |
-//! | Findings             | ✗           | ✓            | ✓                 |
-//! | Evidence data        | ✗           | ✓            | ✓                 |
-//! | Collection method    | ✗           | ✓            | ✓                 |
-//! | Collection target    | ✗           | ✓            | ✓                 |
-//! | Collection command   | ✗           | ✗            | ✓                 |
-//! | Collection inputs    | ✗           | ✗            | ✓                 |
+//! The envelope carries a pre-computed `replay_hash` from `ExecutionManifest`.
+//! The hash is computed ONCE during execution and passed through unchanged.
 //!
 //! ## Usage
 //!
-//! ### Building Attestations
-//!
 //! ```rust,ignore
-//! use common::results::{ResultBuilder, CheckInput, Criticality, Outcome, IdentityStatus};
+//! use common::results::{ResultBuilder, AssessorInput, Criticality, Outcome, IdentityStatus};
 //!
-//! let builder = ResultBuilder::from_system("agent-001");
-//! let identity_status = IdentityStatus::success("scanset://prod/aws/...");
-//!
-//! let checks = vec![
-//!     CheckInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass),
-//!     CheckInput::new("policy-2", "linux", Criticality::Medium, vec![], Outcome::Fail),
-//! ];
-//!
-//! // Pre-computed hashes from ExecutionManifest
-//! let attestation = builder.build_attestation(
-//!     checks,
-//!     manifest.content_hash,
-//!     manifest.evidence_hash,
-//!     identity_status,
-//! )?;
-//! ```
-//!
-//! ### Building Full Results
-//!
-//! ```rust,ignore
-//! use common::results::{ResultBuilder, PolicyInput, Criticality, Outcome, IdentityStatus};
-//!
-//! let builder = ResultBuilder::from_system("agent-001");
+//! let builder = ResultBuilder::from_system("esp-agent");
 //! let identity_status = IdentityStatus::disabled("unsigned:agent:host-abc123");
 //!
 //! let policies = vec![
-//!     PolicyInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass)
+//!     AssessorInput::new("policy-1", "linux", Criticality::High, vec![], Outcome::Pass)
 //!         .with_findings(findings)
 //!         .with_evidence(evidence),
 //! ];
 //!
-//! // Pre-computed hashes from ExecutionManifest
-//! let full_result = builder.build_full_result(
+//! let package = builder.build_assessor_package(
 //!     policies,
-//!     manifest.content_hash,
-//!     manifest.evidence_hash,
+//!     manifest.replay_hash,
 //!     identity_status,
 //! )?;
 //! ```
 
 // ============================================================================
-// Core modules (always available)
+// Modules
 // ============================================================================
 
 pub mod common;
@@ -130,26 +84,15 @@ pub mod evidence;
 pub mod finding;
 pub mod identity;
 pub mod identity_status;
+pub mod observation;
 pub mod summary;
 pub mod transparency;
 
+pub mod assessor;
 pub mod builder;
 
 // ============================================================================
-// Feature-gated modules
-// ============================================================================
-
-#[cfg(feature = "attestation")]
-pub mod attestation;
-
-#[cfg(feature = "full-results")]
-pub mod full;
-
-#[cfg(feature = "assessor-evidence")]
-pub mod assessor;
-
-// ============================================================================
-// Common re-exports (always available)
+// Re-exports
 // ============================================================================
 
 pub use common::{
@@ -164,10 +107,15 @@ pub use evidence::{CollectionRecord, Evidence};
 pub use finding::{ComplianceFinding, FindingBuilder, FindingSeverity};
 pub use identity::PolicyIdentity;
 pub use identity_status::{generate_unsigned_signer_id, IdentityStatus};
+pub use observation::{HostRef, Observation, ObservationMethod, ObservationRef};
 pub use summary::{CriticalityBreakdown, CriticalityStats, ExecutionSummary, ScanSummary};
 pub use transparency::{InclusionProof, TransparencyProof};
 
-pub use builder::ResultBuilder;
+pub use assessor::{
+    AssessorPackage, AssessorPackageBuilder, AssessorPolicyResult, CollectionCommand, PackageInfo,
+    ReproducibilityInfo,
+};
+pub use builder::{AssessorInput, PolicyMetadata, ResultBuilder};
 
 // ============================================================================
 // Crypto re-exports
@@ -176,50 +124,8 @@ pub use builder::ResultBuilder;
 pub use crypto::{hash_content, hex_decode, hex_encode, sha256_hash, HashingError};
 
 // ============================================================================
-// Attestation re-exports (feature: attestation)
+// Type aliases
 // ============================================================================
 
-#[cfg(feature = "attestation")]
-pub use attestation::{AttestationBuilder, AttestationResult, CheckAttestation};
-
-#[cfg(feature = "attestation")]
-pub use builder::CheckInput;
-
-// ============================================================================
-// Full results re-exports (feature: full-results)
-// ============================================================================
-
-#[cfg(feature = "full-results")]
-pub use full::{FullResult, FullResultBuilder, PolicyResult};
-
-#[cfg(feature = "full-results")]
-pub use builder::PolicyInput;
-
-// ============================================================================
-// Assessor package re-exports (feature: assessor-evidence)
-// ============================================================================
-
-#[cfg(feature = "assessor-evidence")]
-pub use assessor::{
-    AssessorPackage, AssessorPackageBuilder, AssessorPolicyResult, CollectionCommand, PackageInfo,
-    ReproducibilityInfo,
-};
-
-#[cfg(feature = "assessor-evidence")]
-pub use builder::AssessorInput;
-
-/// Primary assessor package type (feature: assessor-evidence)
-#[cfg(feature = "assessor-evidence")]
+/// Primary result type emitted by the agent. Alias for `AssessorPackage`.
 pub type AssessorResult = AssessorPackage;
-
-// ============================================================================
-// Type aliases for convenience
-// ============================================================================
-
-/// Primary attestation type (feature: attestation)
-#[cfg(feature = "attestation")]
-pub type Attestation = AttestationResult;
-
-/// Primary full result type (feature: full-results)
-#[cfg(feature = "full-results")]
-pub type FullResults = FullResult;

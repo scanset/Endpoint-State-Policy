@@ -14,9 +14,8 @@
 //! in `ExecutionEngine::execute()` and passed to the builder. The builder
 //! does NOT compute the hash - it only accepts the pre-computed value.
 //!
-//! This ensures hash consistency across all output formats (attestation,
-//! full-results, assessor-evidence). The replay hash captures intent +
-//! contract + outcome rolled up through the CRI tree.
+//! The replay hash captures intent + contract + outcome rolled up through
+//! the CRI tree.
 //!
 //! ## Identity Status
 //!
@@ -24,12 +23,10 @@
 //! indicates whether PKI identity was established. This must be provided
 //! when building assessor packages.
 //!
-//! ## Feature Flag
+//! ## Feature Flags
 //!
-//! This module requires the `assessor-evidence` feature, which implies `full-results`.
-//! When enabled, `CollectionMethod` serialization includes:
-//! - `command` - The exact command executed
-//! - `inputs` - Input parameters used
+//! None. As of v2.0.0 this module is always compiled and `CollectionMethod`
+//! always serializes `command` + `inputs` when populated.
 
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +37,7 @@ use super::evidence::Evidence;
 use super::finding::ComplianceFinding;
 use super::identity::PolicyIdentity;
 use super::identity_status::IdentityStatus;
+use super::observation::{Observation, ObservationRef};
 use super::summary::ExecutionSummary;
 
 // ============================================================================
@@ -127,6 +125,15 @@ pub struct AssessorPolicyResult {
     pub findings: Vec<ComplianceFinding>,
     pub evidence: Evidence,
     pub reproducibility: ReproducibilityInfo,
+    /// Observations (raw evidence) cited by this policy, by uuid.
+    ///
+    /// As of v2.0.0, raw evidence lives once at `ResultEnvelope.observations[]`
+    /// and policies cite it by uuid here. During the v1.x->v2.x transition the
+    /// per-policy `evidence` field is also populated so legacy consumers keep
+    /// working; v2.0.0 consumers should prefer resolving these refs against
+    /// the envelope's observations array.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observation_refs: Vec<ObservationRef>,
 }
 
 impl AssessorPolicyResult {
@@ -145,7 +152,15 @@ impl AssessorPolicyResult {
             findings,
             evidence,
             reproducibility,
+            observation_refs: Vec::new(),
         }
+    }
+
+    /// Attach observation references. Typically called by the builder after
+    /// dedup-aware observation construction (see `ResultBuilder::build_assessor_package`).
+    pub fn with_observation_refs(mut self, refs: Vec<ObservationRef>) -> Self {
+        self.observation_refs = refs;
+        self
     }
 
     pub fn passed(&self) -> bool {
@@ -260,6 +275,7 @@ pub struct AssessorPackageBuilder {
     replay_hash: Option<String>,
     identity_status: Option<IdentityStatus>,
     notes: Option<String>,
+    observations: Vec<Observation>,
 }
 
 impl AssessorPackageBuilder {
@@ -271,11 +287,20 @@ impl AssessorPackageBuilder {
             replay_hash: None,
             identity_status: None,
             notes: None,
+            observations: Vec::new(),
         }
     }
 
     pub fn add_policy(&mut self, policy: AssessorPolicyResult) {
         self.policies.push(policy);
+    }
+
+    /// Attach the full observations array that policies' `observation_refs`
+    /// will resolve against. Typically called by `ResultBuilder::build_assessor_package`
+    /// after dedup-aware construction.
+    pub fn with_observations(mut self, observations: Vec<Observation>) -> Self {
+        self.observations = observations;
+        self
     }
 
     /// Set the replay hash (pre-computed from ExecutionManifest)
@@ -330,7 +355,8 @@ impl AssessorPackageBuilder {
         }
 
         let envelope = ResultEnvelope::with_identity(self.agent, self.host, identity_status)
-            .with_replay_hash(replay_hash);
+            .with_replay_hash(replay_hash)
+            .with_observations(self.observations);
 
         let mut package_info = PackageInfo::default();
         if let Some(notes) = self.notes {

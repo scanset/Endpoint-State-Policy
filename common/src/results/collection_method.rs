@@ -9,8 +9,10 @@
 //! The output format controls what gets serialized:
 //!
 //! - `attestation` mode: Only `method_type` in summary (CUI-free)
-//! - `full-results` mode: Full `CollectionMethod` without command/inputs
-//! - `assessor-evidence` mode: Full `CollectionMethod` with command/inputs
+//! As of v2.0.0 there are no feature gates: every `CollectionMethod` carries
+//! `command` + `inputs` unconditionally. The envelope is always the full
+//! assessor shape — consumers that don't want those fields can drop them
+//! post-serialization.
 //!
 //! # Example
 //!
@@ -132,13 +134,11 @@ pub struct CollectionMethod {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
 
-    /// The exact command executed (feature: assessor-evidence)
-    #[cfg_attr(not(feature = "assessor-evidence"), serde(skip_serializing))]
+    /// The exact command executed (v2.0.0: always serialized when present).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub command: Option<String>,
 
-    /// Input parameters used in collection (feature: assessor-evidence)
-    #[cfg_attr(not(feature = "assessor-evidence"), serde(skip_serializing))]
+    /// Input parameters used in collection (v2.0.0: always serialized when present).
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub inputs: HashMap<String, String>,
 }

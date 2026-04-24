@@ -1,6 +1,5 @@
-//! Common types shared between attestation and full-results features
-//!
-//! These types are used regardless of which feature set is enabled.
+//! Shared primitive types used throughout the `results` module (outcomes,
+//! criticality levels, control mappings, weights, counts). Always compiled.
 
 pub mod control;
 pub mod counts;

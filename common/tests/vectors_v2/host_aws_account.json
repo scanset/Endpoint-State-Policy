@@ -1,0 +1,9 @@
+{
+  "host_type": "aws.account",
+  "host_id": "123456789012",
+  "attrs": {
+    "account_id": "123456789012",
+    "partition": "aws",
+    "region": "us-east-1"
+  }
+}

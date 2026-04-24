@@ -8,13 +8,9 @@
 //! This module implements the `ComplianceFinding` structure from the
 //! ESP v1.0.0 Canonical Execution Schema (Section 9).
 //!
-//! ## Content Matrix
-//!
-//! | Output Mode       | Findings Included |
-//! |-------------------|-------------------|
-//! | attestation       | No                |
-//! | full-results      | Yes               |
-//! | assessor-evidence | Yes               |
+//! As of v2.0.0 findings are always included in the `AssessorPackage`
+//! envelope. Consumers that need an attestation-style (CUI-free) view
+//! should drop the `findings` array in their own post-processing.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

@@ -8,21 +8,12 @@ repository.workspace = true
 homepage.workspace = true
 description = "Common types and utilities shared across ESP crates"
 
+# Assessor-package output is the ONLY shipping format as of v2.0.0. Previous
+# versions offered attestation / full-results / assessor-evidence as a
+# feature matrix; those have all been removed in favor of a single, complete
+# envelope type. See CHANGELOG [2.0.0] for rationale.
 [features]
-default = ["attestation"]
-
-# CUI-free attestations safe for network transport
-# Includes: PolicyOutcome, CheckAttestation, EvidenceSummary (hash only)
-attestation = []
-
-# Full results with CUI (findings + evidence)
-# Includes: PolicyResult, ComplianceFinding, Evidence (actual values)
-full-results = []
-
-# Assessor-grade evidence traceability
-# Includes: CollectionMethod with command and inputs fields
-# Requires full-results as evidence context is needed
-assessor-evidence = ["full-results"]
+default = []
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
