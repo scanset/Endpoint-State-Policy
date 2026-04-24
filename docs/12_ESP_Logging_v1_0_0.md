@@ -6,6 +6,26 @@
 
 ---
 
+> **v2.0.0 cross-reference.** Event model, error-code taxonomy,
+> severity classification, file-aware logging, and audit-event
+> non-suppressibility in this document are **unchanged** in v2.0.0.
+>
+> Two v2.0.0-adjacent notes:
+>
+> - Log events that reference collection activity may now carry an
+>   `observation_uuid` field linking the log line to the entry in
+>   `ResultEnvelope.observations[]`. This is additive — consumers that
+>   ignore the field continue to function.
+> - Channel-level events (connect / tunnel ready / channel close) from
+>   transports like Azure Bastion SHOULD include `channel_kind` and
+>   (where applicable) `target_resource_id` so log correlation against
+>   the envelope's `host.attrs` works without a join table.
+>
+> Neither is a breaking change. Existing v1.x log consumers continue to
+> parse v2.0.0 logs without modification.
+
+---
+
 ## 1. Overview
 
 This document specifies the logging system for ESP v1.0.0, defining the event model, error classification, output formats, and integration patterns for the compiler, scanner, and consumer applications.

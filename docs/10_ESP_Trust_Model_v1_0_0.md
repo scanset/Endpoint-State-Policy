@@ -6,6 +6,36 @@
 
 ---
 
+> **v2.0.0 cross-reference.** The core trust principle stated in §1.1
+> (ESP does not trust inputs, does not infer truth, does not leak
+> evidence) is **unchanged**. The forensic-chain guarantees in §1.2
+> (what/how/state as a replay hash) are also **unchanged** — the hash
+> algorithm, canonicalization rules, and signing boundary are the same.
+>
+> Two v2.0.0 refinements to call out:
+>
+> 1. **Host binding is now transport-attested.** The `ResultEnvelope.host`
+>    field is populated by `Channel::identify_host()` — the transport
+>    that actually reached the target — rather than by
+>    `HostInfo::from_system()` on the scanner box. An Azure Bastion scan
+>    emits `host_type: "azure.vm"` with `subscription_id` /
+>    `resource_group` / `target_resource_id` in `attrs`; an SSH scan
+>    emits `host_id: "ssh://<user>@<host>:<port>"`. The envelope attests
+>    about the **target**, not the scanner.
+>
+> 2. **Replay-hash invariants are explicit.** v2.0.0 §6 of
+>    `docs/09_ESP_Canonical_Schema_v2_0_0.md` enumerates what is
+>    excluded from the replay hash (host block, observations[],
+>    timestamps) so the hash remains stable across scans of the same
+>    posture regardless of when or from where the scan ran. The
+>    forensic chain threads through observation `content_hash` values,
+>    not inline evidence blobs.
+>
+> The v1.2 attestation / full / assessor outputs and their signing rules
+> are carried forward unchanged in v2.0.0.
+
+---
+
 ## 1. Overview
 
 This document specifies the trust model for ESP v1.2.0, defining trust boundaries, validation requirements, and security guarantees at every stage of policy processing. The trust model is the normative reference for how ESP establishes, maintains, and demonstrates security state.

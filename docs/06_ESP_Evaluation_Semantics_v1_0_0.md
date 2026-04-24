@@ -6,6 +6,27 @@
 
 ---
 
+> **v2.0.0 cross-reference.** Outcome semantics (`Pass` / `Fail` /
+> `Error`), TEST specification, and CRI AND/OR short-circuit rules in
+> this document are **unchanged** in v2.0.0. What changes is how the
+> **evidence** backing an outcome is carried on the wire:
+>
+> - v1.x: `PolicyResult.evidence` embedded the collected data inline,
+>   duplicated across every policy that consumed it.
+> - v2.0.0: evidence lives once in `ResultEnvelope.observations[]`.
+>   `PolicyResult.observation_refs[]` cites the observations that
+>   produced the outcome by uuid. A single file read cited by ten
+>   policies appears once in `observations[]`, ten times in
+>   `observation_refs[]`.
+>
+> This is a wire-shape refactor, not a semantic change: the set of
+> facts that determined the outcome is identical; only their
+> representation in the envelope differs. See
+> `docs/09_ESP_Canonical_Schema_v2_0_0.md` §5 and §7 for the
+> `PolicyResult` / `Observation` binding rules.
+
+---
+
 ## 1. Overview
 
 This document specifies the evaluation semantics for ESP v1.0.0, including outcome types, STATE evaluation, TEST specification, and CRI (criteria) logic.

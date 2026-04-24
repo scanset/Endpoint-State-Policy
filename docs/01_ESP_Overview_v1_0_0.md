@@ -6,6 +6,24 @@
 
 ---
 
+> **v2.0.0 cross-reference.** The DSL surface described in this document
+> (grammar, types, evaluation) is **unchanged** in v2.0.0. What changes in
+> v2.0.0 is the **output envelope**:
+>
+> - Hosts are polymorphic (`host_type` is a dotted `<provider>.<kind>` —
+>   `linux.vm`, `azure.vm`, `aws.account`, `m365.tenant`, ...). The
+>   single-Linux-VM assumption in this document's result-format sections
+>   is superseded.
+> - Evidence is lifted out of `PolicyResult.evidence` into a top-level
+>   `observations[]` array; policies cite it by uuid via
+>   `PolicyResult.observation_refs[]`.
+>
+> The full v2.0.0 envelope specification is in
+> `docs/09_ESP_Canonical_Schema_v2_0_0.md`. Sections 4–7 of that document
+> supersede the result-format tables here for v2.0.0 output.
+
+---
+
 ## 1. Purpose
 
 This specification defines the Endpoint State Policy (ESP) Domain-Specific Language version 1.0.0. ESP enables declarative definition of compliance checks for endpoint systems.

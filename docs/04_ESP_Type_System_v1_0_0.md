@@ -6,6 +6,25 @@
 
 ---
 
+> **v2.0.0 cross-reference.** The **policy-language** type system defined
+> here (string / int / float / boolean / binary / timestamp / duration /
+> path / identifier / record) is **unchanged** in v2.0.0. Strict typing
+> and no-implicit-conversion rules continue to apply.
+>
+> v2.0.0 adds one new type at the **output-envelope** layer only:
+> `Value` — an untyped JSON value used in two specific places:
+> `HostInfo.attrs: map<string, Value>` (provider-specific host
+> attributes like `subscription_id`, `region`, `account_id`) and
+> `Observation.body: Value` (the collected payload). Neither is
+> accessible from ESP source — policies cannot construct or inspect
+> `Value`. It is purely a wire-shape concern for producers and
+> consumers of `ResultEnvelope`.
+>
+> See `docs/09_ESP_Canonical_Schema_v2_0_0.md` §3.4 (HostInfo) and §4
+> (Observation) for the envelope-level type rules.
+
+---
+
 ## 1. Overview
 
 This document specifies the ESP type system, including data types, type compatibility rules, and operation legality. ESP v1.0.0 employs strict typing with no implicit conversions.

@@ -1,8 +1,29 @@
 # ESP v1.2.0 — Canonical Execution Schema
 
 **Version:** 1.2.0
-**Status:** Normative
+**Status:** Normative (v1.2 line only — SUPERSEDED by v2.0.0 for new envelopes)
 **Last Updated:** 2026-03-01
+
+---
+
+> **This document describes the v1.2.0 envelope.** New envelopes emitted
+> by the agent are v2.0.0 and follow the schema in
+> `docs/09_ESP_Canonical_Schema_v2_0_0.md`. This document remains
+> normative for archived v1.x envelopes and for consumers that must
+> continue reading them; it is NOT updated further.
+>
+> Key v1.2 → v2.0.0 differences:
+>
+> - `HostInfo` is polymorphic — `host_type` is a dotted `<provider>.<kind>`
+>   string, not implicitly `linux.vm`.
+> - A top-level `observations[]` array replaces inline
+>   `PolicyResult.evidence`. Policies cite evidence by uuid via
+>   `observation_refs[]`.
+> - Replay hash invariants are explicit: host block, `observations[]`,
+>   and timestamps are excluded.
+>
+> No migration tool is provided: v1.x envelopes are archived as-is; new
+> scans emit v2.0.0.
 
 ---
 
