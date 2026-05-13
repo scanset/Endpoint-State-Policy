@@ -79,6 +79,11 @@ exceptions = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace-local path dependencies (`common = { path = "common" }`) appear
+# to cargo-deny as wildcards because they carry no version constraint.
+# They aren't real wildcards — the path scopes the dep to a known crate
+# inside the workspace — so allow them explicitly.
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
