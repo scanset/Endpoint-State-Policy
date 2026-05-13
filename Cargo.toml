@@ -18,10 +18,14 @@ thiserror = "1.0"
 toml = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 
-# Workspace-internal dependencies
-common = { path = "common" }
-compiler = { path = "compiler" }
-execution_engine = { path = "execution_engine" }
+# Workspace-internal dependencies.
+# Version must match `workspace.package.version` above — cargo-deny
+# rejects path-only deps for publishable crates because crates.io won't
+# accept them. The `changelog_version_coupling` test asserts this stays
+# in sync.
+common = { path = "common", version = "2.2.2" }
+compiler = { path = "compiler", version = "2.2.2" }
+execution_engine = { path = "execution_engine", version = "2.2.2" }
 
 [profile.dev]
 opt-level = 0
