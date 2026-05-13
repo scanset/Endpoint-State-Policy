@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Git pre-commit hook for ESP. Installed by `make install-hooks`.
+#
+# This is the FAST gate. It catches the two failure modes that are
+# trivial to fix locally and most painful when caught only in CI:
+#
+#   1. Formatting drift   — `cargo fmt --check` fails.
+#   2. SBOM staleness     — Cargo.lock changed but docs/sbom/ wasn't
+#                           regenerated.
+#
+# Lint and test are NOT in this hook — they're slow enough to discourage
+# routine commits if forced on every one. Run `make ready` (or `make
+# pre-commit`) before pushing to catch those locally instead of in CI.
+
+set -eu
+
+# Skip hook entirely if no relevant files changed (allows docs-only or
+# config-only commits to bypass without unpacking a cargo workspace).
+if ! git diff --cached --name-only --diff-filter=AM \
+    | grep -qE '\.(rs|toml|lock)$'; then
+    exit 0
+fi
+
+echo "→ pre-commit: cargo fmt --check"
+if ! cargo fmt --all -- --check; then
+    cat <<EOF
+
+✗ Formatting check failed.
+
+  Fix:    make format
+          git add -u
+          git commit  (retry)
+EOF
+    exit 1
+fi
+
+# SBOM freshness — only relevant if Cargo.lock is part of this commit.
+if git diff --cached --name-only --diff-filter=AM | grep -q '^Cargo\.lock$'; then
+    echo "→ pre-commit: Cargo.lock changed; regenerating SBOM"
+    if ! make --silent sbom; then
+        echo ""
+        echo "✗ make sbom failed."
+        exit 1
+    fi
+    if ! git diff --exit-code -- docs/sbom/ > /dev/null 2>&1; then
+        cat <<EOF
+
+✗ SBOM was stale. It has been regenerated.
+
+  Fix:    git add docs/sbom/
+          git commit --amend --no-edit   (or re-commit)
+EOF
+        exit 1
+    fi
+fi
+
+echo "✓ pre-commit gate passed."

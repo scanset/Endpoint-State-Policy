@@ -2,9 +2,8 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
   "version": 1,
-  "serialNumber": "urn:uuid:f5c6909a-7b04-43e8-85be-d97ba62daba3",
   "metadata": {
-    "timestamp": "2026-05-13T18:47:26.329194613Z",
+    "timestamp": "1970-01-01T00:00:00Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -20,7 +19,7 @@
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file:///home/local/sync/Endpoint-State-Policy/common#2.2.2",
+      "bom-ref": "path+file://./common#2.2.2",
       "author": "Curtis Slone <curtis@scanset.io>",
       "name": "common",
       "version": "2.2.2",
@@ -45,7 +44,7 @@
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///home/local/sync/Endpoint-State-Policy/common#2.2.2 bin-target-0",
+          "bom-ref": "path+file://./common#2.2.2 bin-target-0",
           "name": "common",
           "version": "2.2.2",
           "purl": "pkg:cargo/common@2.2.2?download_url=file://.#src/lib.rs"
@@ -953,7 +952,7 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///home/local/sync/Endpoint-State-Policy/common#2.2.2",
+      "ref": "path+file://./common#2.2.2",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.42",
         "registry+https://github.com/rust-lang/crates.io-index#openssl@0.10.75",

@@ -1,7 +1,7 @@
 # ESP Monorepo Makefile
 # Provides convenient commands for development, testing, and building
 
-.PHONY: help build build-all build-libs test lint clean check security audit deny sbom build-auditable format docs dev release
+.PHONY: help build build-all build-libs test lint clean check security audit deny sbom build-auditable format docs dev release ready pre-commit install-hooks
 
 # Default target
 help:
@@ -40,7 +40,10 @@ help:
 	@echo "  make docs-all     - Generate all documentation"
 	@echo ""
 	@echo "Pre-commit:"
-	@echo "  make pre-commit   - Run pre-commit checks"
+	@echo "  make ready        - Auto-fix everything and run the full gate"
+	@echo "                      (format + sbom + lint + test)"
+	@echo "  make pre-commit   - Run the read-only pre-commit gate (no auto-fix)"
+	@echo "  make install-hooks - Install the git pre-commit hook"
 	@echo ""
 
 # =============================================================================
@@ -143,14 +146,20 @@ deny:
 # Implements NIST SP 800-218 SSDF PS.3.2 (provenance for components).
 # cargo-cyclonedx 0.5+ writes each SBOM next to its crate's Cargo.toml;
 # we relocate them after generation so all SBOMs live in one place.
+# scripts/normalize_sbom.py canonicalizes volatile fields (serialNumber,
+# timestamp, absolute checkout paths) so the artifact is reproducible
+# across machines as required by SSDF PS.3.2.
 sbom:
 	@which cargo-cyclonedx > /dev/null || \
 		(echo "cargo-cyclonedx not found. Run: make install-tools" && exit 1)
+	@command -v python3 > /dev/null || \
+		(echo "python3 required for SBOM normalization" && exit 1)
 	@mkdir -p docs/sbom
 	cargo cyclonedx --format json --spec-version 1.5 --quiet
 	@find . -maxdepth 3 -name '*.cdx.json' -not -path './target/*' -not -path './docs/*' \
 		-exec mv {} docs/sbom/ \;
-	@echo "Generated SBOMs:"
+	python3 scripts/normalize_sbom.py docs/sbom/*.cdx.json
+	@echo "Generated (canonicalized) SBOMs:"
 	@ls -1 docs/sbom/*.cdx.json
 
 # Release build with embedded dependency tree (cargo-auditable)
@@ -204,6 +213,30 @@ clean-all: clean
 
 pre-commit: format-check lint test
 	@echo "✓ Pre-commit checks passed"
+
+# Auto-fix everything that can be auto-fixed, then run the full gate.
+# This is what to run locally before `git push` to mirror what CI will
+# enforce. Order matters: format first (changes lines), then sbom
+# (changes files), then lint + test against the canonicalized tree.
+ready: format sbom lint test
+	@echo ""
+	@echo "✓ Ready to commit. Review changes with: git status"
+
+# Install the repository's pre-commit hook into .git/hooks/.
+# Idempotent: re-running overwrites the existing hook. The previous
+# hook (if any) is backed up to .git/hooks/pre-commit.bak.
+install-hooks:
+	@if [ ! -d .git ]; then \
+		echo "Not a git repository; nothing to install."; exit 1; \
+	fi
+	@if [ -f .git/hooks/pre-commit ] && [ ! -L .git/hooks/pre-commit ]; then \
+		mv .git/hooks/pre-commit .git/hooks/pre-commit.bak; \
+		echo "→ existing .git/hooks/pre-commit backed up to .bak"; \
+	fi
+	@cp scripts/git-pre-commit .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "✓ Installed scripts/git-pre-commit → .git/hooks/pre-commit"
+	@echo "  Skip the hook for an individual commit with: git commit --no-verify"
 
 ci: format-check lint test-all security
 	@echo "✓ CI checks passed"

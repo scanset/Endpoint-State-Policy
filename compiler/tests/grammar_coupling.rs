@@ -31,10 +31,9 @@ fn workspace_root() -> PathBuf {
 fn ebnf_quoted_terminals(ebnf: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for line in ebnf.lines() {
-        let mut chars = line.chars().peekable();
         let mut buf = String::new();
         let mut in_quote = false;
-        while let Some(c) = chars.next() {
+        for c in line.chars() {
             if c == '"' {
                 if in_quote {
                     // Closing quote — accept the buffer if it looks like a keyword
@@ -71,7 +70,7 @@ fn is_keyword_shape(s: &str) -> bool {
     let all_lower = s
         .chars()
         .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit());
-    let starts_alpha = s.chars().next().map_or(false, |c| c.is_ascii_alphabetic());
+    let starts_alpha = s.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
     (all_upper || all_lower) && starts_alpha
 }
 
@@ -100,8 +99,7 @@ fn every_parser_keyword_appears_in_ebnf() {
         .map(|s| (*s).to_string())
         .collect();
 
-    let missing_from_ebnf: Vec<&String> =
-        parser_keywords.difference(&ebnf_keywords).collect();
+    let missing_from_ebnf: Vec<&String> = parser_keywords.difference(&ebnf_keywords).collect();
 
     assert!(
         missing_from_ebnf.is_empty(),

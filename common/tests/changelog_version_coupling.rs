@@ -42,7 +42,10 @@ fn workspace_version() -> String {
             }
         }
     }
-    panic!("Could not find [workspace.package] version in {:?}", cargo_toml);
+    panic!(
+        "Could not find [workspace.package] version in {:?}",
+        cargo_toml
+    );
 }
 
 /// Parse the top-most `## [X.Y.Z]` heading from `CHANGELOG.md`.
@@ -68,14 +71,12 @@ fn changelog_top_entry_matches_workspace_version() {
     let cl = changelog_top_version();
 
     assert_eq!(
-        ws,
-        cl,
+        ws, cl,
         "\nCHANGELOG / Cargo.toml version drift detected:\n\
          \n  Cargo.toml [workspace.package].version = {:?}\n\
          \n  CHANGELOG.md top entry                  = {:?}\n\
          \nIf you bumped the workspace version, add a matching CHANGELOG entry.\n\
          If you added a CHANGELOG entry, bump the workspace version to match.",
-        ws,
-        cl,
+        ws, cl,
     );
 }

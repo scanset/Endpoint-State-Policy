@@ -2,9 +2,8 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
   "version": 1,
-  "serialNumber": "urn:uuid:5cf0648a-2bd5-4483-89cb-6b0645363dbf",
   "metadata": {
-    "timestamp": "2026-05-13T18:47:26.330254037Z",
+    "timestamp": "1970-01-01T00:00:00Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -20,7 +19,7 @@
     ],
     "component": {
       "type": "application",
-      "bom-ref": "path+file:///home/local/sync/Endpoint-State-Policy/compiler#2.2.2",
+      "bom-ref": "path+file://./compiler#2.2.2",
       "author": "Curtis Slone <curtis@scanset.io>",
       "name": "compiler",
       "version": "2.2.2",
@@ -35,14 +34,14 @@
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///home/local/sync/Endpoint-State-Policy/compiler#2.2.2 bin-target-0",
+          "bom-ref": "path+file://./compiler#2.2.2 bin-target-0",
           "name": "compiler",
           "version": "2.2.2",
           "purl": "pkg:cargo/compiler@2.2.2?download_url=file://.#src/lib.rs"
         },
         {
           "type": "application",
-          "bom-ref": "path+file:///home/local/sync/Endpoint-State-Policy/compiler#2.2.2 bin-target-1",
+          "bom-ref": "path+file://./compiler#2.2.2 bin-target-1",
           "name": "compiler",
           "version": "2.2.2",
           "purl": "pkg:cargo/compiler@2.2.2?download_url=file://.#src/main.rs"
@@ -59,7 +58,7 @@
   "components": [
     {
       "type": "library",
-      "bom-ref": "path+file:///home/local/sync/Endpoint-State-Policy/common#2.2.2",
+      "bom-ref": "path+file://./common#2.2.2",
       "author": "Curtis Slone <curtis@scanset.io>",
       "name": "common",
       "version": "2.2.2",
@@ -1272,7 +1271,7 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///home/local/sync/Endpoint-State-Policy/common#2.2.2",
+      "ref": "path+file://./common#2.2.2",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.42",
         "registry+https://github.com/rust-lang/crates.io-index#openssl@0.10.75",
@@ -1281,10 +1280,10 @@
       ]
     },
     {
-      "ref": "path+file:///home/local/sync/Endpoint-State-Policy/compiler#2.2.2",
+      "ref": "path+file://./compiler#2.2.2",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.42",
-        "path+file:///home/local/sync/Endpoint-State-Policy/common#2.2.2",
+        "path+file://./common#2.2.2",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.228",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.148",
         "registry+https://github.com/rust-lang/crates.io-index#thiserror@1.0.69",
