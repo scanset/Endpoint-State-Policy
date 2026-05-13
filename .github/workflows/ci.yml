@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs on the same PR / branch when a new push lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint:
+    name: Lint (rustfmt + clippy strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (strict, matches `make lint`)
+        run: |
+          cargo clippy --workspace --all-targets --all-features -- \
+            -D warnings \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used \
+            -D clippy::panic \
+            -D clippy::indexing_slicing
+
+  test:
+    name: Test (workspace, all-features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+
+      - name: Run workspace tests (includes drift-coupling tests)
+        run: cargo test --workspace --all-features --no-fail-fast
+
+  security:
+    name: Security (cargo-audit + cargo-deny)
+    runs-on: ubuntu-latest
+    # NIST SP 800-218 SSDF: PW.4.4, PW.8.2, RV.1.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: security
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+
+      - name: cargo audit (RustSec advisory scan)
+        run: cargo audit
+
+      - name: cargo-deny check (license + sources + bans + advisories)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  sbom-freshness:
+    name: SBOM freshness (PS.3.2)
+    runs-on: ubuntu-latest
+    # Regenerates the SBOM and verifies the committed copy is current.
+    # If this fails: run `make sbom` locally and commit the result.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sbom
+
+      - name: Install cargo-cyclonedx
+        run: cargo install --locked cargo-cyclonedx
+
+      - name: Regenerate SBOM
+        run: make sbom
+
+      - name: Verify committed SBOM matches Cargo.lock
+        run: |
+          if ! git diff --exit-code -- docs/sbom/; then
+            echo ""
+            echo "::error::SBOM is stale — Cargo.lock changed but docs/sbom/ wasn't regenerated."
+            echo "::error::Fix: run \`make sbom\` locally and commit the resulting docs/sbom/*.cdx.json files."
+            exit 1
+          fi
+
+  build:
+    name: Build (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+
+      - name: cargo build --release
+        run: cargo build --release --workspace
+
+  # Aggregator job — single status check that all required gates passed.
+  # Useful as the only required check in branch-protection settings.
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [lint, test, security, sbom-freshness, build]
+    steps:
+      - name: Verify all required jobs passed
+        run: |
+          if [[ "${{ needs.lint.result }}"           != "success" || \
+                "${{ needs.test.result }}"           != "success" || \
+                "${{ needs.security.result }}"       != "success" || \
+                "${{ needs.sbom-freshness.result }}" != "success" || \
+                "${{ needs.build.result }}"          != "success" ]]; then
+            echo "One or more required jobs failed:"
+            echo "  lint:           ${{ needs.lint.result }}"
+            echo "  test:           ${{ needs.test.result }}"
+            echo "  security:       ${{ needs.security.result }}"
+            echo "  sbom-freshness: ${{ needs.sbom-freshness.result }}"
+            echo "  build:          ${{ needs.build.result }}"
+            exit 1
+          fi
+          echo "✓ All CI gates green."

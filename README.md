@@ -59,6 +59,30 @@ ESP focuses on **technical controls** — controls validated by inspecting endpo
 
 ---
 
+## Policy Categories
+
+ESP policies fall into one of two categories based on what an OBJECT
+represents:
+
+| Category | What the OBJECT is | Example |
+|---|---|---|
+| **asset-internal** | An item being scanned **on** a resource. The policy runs against the resource itself. | RHEL9 host checking an installed RPM package; a Windows server inspecting a registry key |
+| **asset-list** | A cloud resource that is itself the thing being scanned. The bound-asset list is supplied as OBJECTs to the policy. | Azure subscription enumerating VMs; AWS account listing S3 buckets |
+
+The replay-hash scheme, dedup semantics, and host-binding rules all
+depend on this categorization:
+
+- **asset-internal** OBJECTs share a template across many hosts and
+  dedup naturally — identical intent + outcome produces one hash.
+- **asset-list** OBJECTs carry asset-specific fields
+  (e.g. `resource_id`) and produce distinct hashes per asset.
+
+See the `replay_hash_version = 2` scheme in
+[docs/10_ESP_Trust_Model_v1_2_0.md](docs/10_ESP_Trust_Model_v1_2_0.md)
+for how per-(criterion, OBJECT) hashing exploits this distinction.
+
+---
+
 ## Core Philosophy
 
 ### Policy as Data, Not Code
@@ -120,8 +144,8 @@ ESP enforces trust boundaries at every stage:
 │                     ▼                                               │
 │  ┌─────────────────────────────────────┐                           │
 │  │         Controlled Disclosure        │                           │
-│  │  • Attestations (network-safe)       │                           │
-│  │  • Full results (local-only)         │                           │
+│  │  • Signed AssessorPackage envelope   │                           │
+│  │  • Observations cited by uuid        │                           │
 │  │  • Audit logging (mandatory)         │                           │
 │  └─────────────────────────────────────┘                           │
 └─────────────────────────────────────────────────────────────────────┘
@@ -135,7 +159,7 @@ ESP enforces trust boundaries at every stage:
 | Capabilities | Privilege escalation |
 | Results | Information leakage |
 
-📄 See [ESP Trust Model](docs/10_ESP_Trust_Model_v1_0_0.md) for complete details.
+📄 See [ESP Trust Model](docs/10_ESP_Trust_Model_v1_2_0.md) for complete details.
 
 ---
 
@@ -363,14 +387,14 @@ We're not looking for customers yet — we're looking for partners who want to s
 |----------|-------------|
 | [ESP Overview](docs/01_ESP_Overview_v1_0_0.md) | Language introduction and concepts |
 | [Lexical Rules](docs/02_ESP_Lexical_Rules_v1_0_0.md) | Token definitions and lexical structure |
-| [Grammar EBNF](docs/03_ESP_Grammar_EBNF_v1_0_0.md) | Formal grammar specification |
+| [Grammar EBNF](docs/03_ESP_Grammar_EBNF_v2_1_0.md) | Formal grammar specification |
 | [Type System](docs/04_ESP_Type_System_v1_0_0.md) | Data types and type compatibility |
 | [Symbol Resolution](docs/05_ESP_Symbol_Resolution_v1_0_0.md) | Symbol tables and reference resolution |
 | [Evaluation Semantics](docs/06_ESP_Evaluation_Semantics_v1_0_0.md) | Runtime evaluation rules |
 | [Meta Requirements](docs/07_ESP_Meta_Requirements_v1_0_0.md) | Structural requirements |
 | [Error Model](docs/08_ESP_Error_Model_v1_0_0.md) | Error codes and handling |
 | [Canonical Schema](docs/09_ESP_Canonical_Schema_v1_0_0.md) | Output format specification |
-| [Trust Model](docs/10_ESP_Trust_Model_v1_0_0.md) | Security boundaries and trust |
+| [Trust Model](docs/10_ESP_Trust_Model_v1_2_0.md) | Security boundaries and trust |
 | [Configuration](docs/11_ESP_Configuration_v1_0_0.md) | Build and runtime configuration |
 | [Logging](docs/12_ESP_Logging_v1_0_0.md) | Logging system specification |
 

@@ -1,97 +1,195 @@
 # Changelog with Security Notes
 
-## [2.0.0] — 2026-04-20
+## [2.2.2] — 2026-05-13
 
-**Schema v2.0.0 — Polymorphic hosts, first-class observations, transport-attested identity.**
-
-This is a major release. The ESP DSL (grammar, types, evaluation) is unchanged; the break is confined to the **output envelope** (`common::results`) and the **channel trait** (`execution_engine::strategies::channel`). v1.x envelopes remain readable by their original consumers — no migration tool is provided; archived v1.x envelopes stay as-is, new scans emit v2.0.0.
-
-### Added
-
-- **Canonical schema spec `docs/09_ESP_Canonical_Schema_v2_0_0.md`** — 12 sections defining the polymorphic host model, `observations[]` array, replay-hash invariants, non-normative `host_type` registry (`linux.vm`, `azure.vm`, `aws.account`, `m365.tenant`, ...), OSCAL mapping table, and conformance rules. The v1.2 canonical schema (`09_ESP_Canonical_Schema_v1_1_0.md`) is marked SUPERSEDED for new envelopes but kept normative for archived ones.
-- **`common::results::observation`** — new module with `Observation`, `HostRef`, `ObservationRef`, `ObservationMethod`. Self-contained RFC 4122 v4 uuid generator (time+counter, no external crate). `ObservationRef` uses `#[serde(transparent)]` so references serialize as bare strings, not `{uuid: "..."}` objects.
-- **`ResultEnvelope.observations: Vec<Observation>`** — top-level evidence array. `PolicyResult.observation_refs: Vec<ObservationRef>` cites observations by uuid. A single file read cited by ten policies now appears once in `observations[]`, ten times in `observation_refs[]`.
-- **`Channel::identify_host() -> Result<HostInfo, ChannelError>`** — new trait method with a default impl (`<os_family>.vm` + `<kind>-unknown` host_id). `LocalChannel` overrides it to read `/etc/machine-id` with a djb2-hostname fallback. Public helper `os_family_label(OsFamily) -> &'static str`.
-- **`pub use common::results::{HostInfo, HostRef}`** in `execution_engine::strategies::channel` — out-of-tree channel crates (channels/, future aws-ssm, winrm) no longer need a direct `common` dependency.
-- **Wire-shape test vectors** — `common/tests/vectors_v2/` contains 7 hand-written golden JSON files (`host_azure_vm.json`, `host_linux_vm.json`, `host_ssh_remote.json`, `host_aws_account.json`, `observation_file_read.json`, `observation_exec.json`, `observation_ref.json`) plus a README. Integration test `common/tests/vectors_v2.rs` (11 tests) round-trips each through its typed struct and asserts `serde_json::Value` equality, pinning: polymorphic `host_type` + full `attrs`, non-VM shape field omission (not `null`), `ObservationRef` bare-string serialization, embedded `HostRef` two-field invariant, `Observation.body` elision in attestation shape.
-- **v2.0.0 cross-reference banners** inserted in docs 01_Overview, 04_Type_System, 06_Evaluation_Semantics, 10_Trust_Model, 12_Logging, and 09_Canonical_Schema_v1_1_0. Each banner is scoped to what in that document does or does not change under v2.0.0; the v1.x normative body is preserved intact.
-
-### Changed
-
-- **`HostInfo` is polymorphic.** Replaced the v1.x fixed shape (`id`, `hostname`, `os`, `arch`) with `host_type: String` (dotted `<provider>.<kind>`), `host_id: String`, optional `hostname` / `os` / `arch` / `fqdn` (omitted — not `null` — for non-VM hosts), and `attrs: BTreeMap<String, serde_json::Value>` for host-type-specific structured attributes.
-- **Legacy `HostInfo::new(id, hostname, os, arch)` preserved** — it now infers `host_type` from `os` (`linux` → `linux.vm`, etc.), keeping ~20 existing callsites source-compatible. New canonical constructor is `HostInfo::for_host_type(host_type, host_id)` with builder-style `.with_hostname()` / `.with_os()` / `.with_arch()` / `.with_attr()` / `.with_fqdn()`. `HostInfo::id()` back-compat accessor returns `&host_id` for call-sites reading the old field name.
-- **`SCHEMA_VERSION` bumped** `"1.2.0"` → `"2.0.0"` in `common::results::envelope`. Serialized envelopes now carry `"schema_version": "2.0.0"` on the wire.
-- **`PolicyResult.evidence` retained with `#[serde(default, skip_serializing_if)]`** during the transition window. `observation_refs` is the v2.0.0 canonical path; `evidence` stays readable for v1.x consumers that haven't migrated.
+**Wire schema bumped `2.1.0` → `2.1.1`.** The envelope no longer makes a
+data-classification claim; classification belongs to the consumer
+pipeline.
 
 ### Removed
 
-v2.0.0 collapses the old three-format output matrix to a single shape. The assessor envelope was already a superset of attestation + full-results; maintaining three parallel formats behind Cargo features cost more than it delivered. The `AssessorPackage` is now the **only** output type and is always compiled in.
+- **`PackageInfo.contains_cui: bool`** and **`PackageInfo.distribution: String`**
+  fields. New envelopes do not carry these fields; consumers reading
+  them must drop the dependency.
 
-- **`AttestationResult`, `CheckAttestation`, `AttestationBuilder`, `CheckInput`** — removed from `common::results`. Use `AssessorPackage` + `AssessorInput`; the attestation shape is a subset (drop `findings` / `observations[]` on the consumer side if CUI-free transport is required).
-- **`FullResult`, `FullResultBuilder`, `PolicyInput`** — removed. `PolicyResult` is retained and is the per-policy entry inside `AssessorPackage`.
-- **`ResultBuilder::build_attestation`, `build_full_result`, `build_both`, `build_all`** — removed. Only `ResultBuilder::build_assessor_package(policies, replay_hash, identity_status)` remains.
-- **Cargo features `attestation`, `full-results`, `assessor-evidence`** — removed from `common/Cargo.toml`. The feature set is now `default = []`.
-- **Agent output modules `agent/src/output/attestation.rs`, `full.rs`, `summary.rs`** — deleted. `output/assessor.rs` and `output/console.rs` remain.
-- **`OutputFormat` enum** (`agent/src/config.rs`) and the **`output_format` field on `ScanConfig`** — removed.
-- **CLI `--format` / `-f` flag** — removed from `agent/src/cli.rs` and its help text. There is nothing to select; the agent always emits an `AssessorPackage`.
+### Changed
+
+- `SCHEMA_VERSION` constant `"2.1.0"` → `"2.1.1"`.
+- Canonical schema doc renamed `09_ESP_Canonical_Schema_v2_1_0.md` →
+  `09_ESP_Canonical_Schema_v2_1_1.md`.
+- Trust Model §7 rewritten: single-envelope reality, sensitivity tiers
+  via consumer-applied filter recipes, pre/post-filter signing
+  patterns.
+- Overview §10 rewritten: single output, filter-recipe table replaces
+  the v1.x four-format matrix.
+
+### Migration
+
+- Consumers reading `PackageInfo.contains_cui` or
+  `PackageInfo.distribution` from envelope JSON must remove the
+  dependency; the fields will be absent in v2.1.1+ envelopes. v2.1.0
+  envelopes containing those fields continue to deserialize (serde
+  ignores unknown fields), so old envelopes remain readable.
+- The trust boundary for "do not transmit sensitive content" moves
+  from format-level containment to consumer-pipeline filtering. See
+  Trust Model §7.3 for the filter recipes.
+
+---
+
+## [2.2.1] — 2026-04-29
+
+### Fixed
+
+- **Agentless CTN-collection timeout.** The 30-second per-criterion ceiling
+  was sized for local agent execution and prematurely failed agentless and
+  cloud-control-plane scans, where each object collection includes 15–30 s
+  of cloud API overhead.
+
+### Changed
+
+- CTN collection timeout now defaults to **600 s** and is overridable via
+  the `ESP_CTN_TIMEOUT_SECS` environment variable.
+
+### Migration
+
+None required. Set `ESP_CTN_TIMEOUT_SECS=30` to restore the previous
+behavior for agent-mode-only deployments.
+
+---
+
+## [2.2.0] — 2026-04-28
+
+**Per-OBJECT replay hashes (v2 hash scheme, additive).** The v1 hash path
+is unchanged and remains the default — every existing envelope and caller
+continues to work. v2 is opt-in.
+
+### Added
+
+- **Per-(CTN, OBJECT) replay hashes** enabling per-asset drift detection
+  and remediation verification. Asset-internal OBJECTs (the same item
+  template scanned across many hosts, e.g. an RPM check on RHEL9)
+  collapse to the same hash; asset-list OBJECTs (a distinct cloud
+  resource per OBJECT) get distinct hashes.
+- Opt-in v2 manifest API: `ReplayManifest::with_replay_hash_version(2)`
+  and `compute_replay_hash_v2()`.
+
+### Changed
+
+- `compute_replay_hash()` now delegates to an explicit
+  `compute_replay_hash_v1()`. Output is byte-identical to v2.1.0.
+
+### Migration
+
+- No envelope on disk changes; v1 envelopes remain verifiable.
+- Cross-version hash comparison (v1 vs v2) is meaningless. Downstream
+  consumers must record `replay_hash_version` alongside the hash.
+
+---
+
+## [2.1.0] — 2026-04-28
+
+**Compiler / engine refinements for asset-list (cloud-resource) workflows.**
+The DSL grammar surface is unchanged. Wire schema bumps `2.0.0` → `2.1.0`
+with an additive `replay_hash_version` field on `ResultEnvelope`
+(back-compat via `#[serde(default)]`).
+
+### Added
+
+- **`SET_REF` as a first-class CTN content operand.** An asset-list
+  policy can declare its bound-asset list as a single SET block and
+  reference it from a CTN, leaving the CTN body immutable. Useful for
+  programmatic policy/asset linkage tools.
+- **Scanner-identity host envelopes.** A new helper builds a
+  scanner-shaped `HostInfo` for in-process scans where the executor is
+  distinct from the subject.
 
 ### Behavior Change
 
-- **Replay-hash invariants are now explicit.** The hash excludes the `host` block, `observations[]`, and all timestamps — so it remains stable across scans of the same posture regardless of scan time, scanner identity, or which channel collected evidence. Schema §6 defines the canonicalization in full.
-- **Agent emits only `AssessorPackage`.** A scan invoked with no flags produces the same envelope shape as one previously invoked with `--format assessor`. Scripts that relied on `--format attestation` or `--format full` to strip fields should instead post-process the assessor JSON (drop `observations[]` for attestation-equivalent output; drop `observations[].body` + `findings` for summary-equivalent output).
+- For in-process scans signing with a workload identity, `envelope.host`
+  now reports the scanner identity instead of the executor's OS hostname
+  (so `envelope.host.host_id == envelope.signature.signer_id`). Standalone
+  CLI scans and asset-internal host-mode scans are unchanged.
 
-### Files Modified
+### Migration
 
-| File | Crate | Changes |
-|------|-------|---------|
-| `common/src/results/observation.rs` | common | New file. `Observation`, `HostRef`, `ObservationRef` (`#[serde(transparent)]`), `ObservationMethod` with `file_read` / `exec` / `http` / `sdk_call` convenience constructors. Self-contained uuid v4 generator. 10 unit tests. |
-| `common/src/results/envelope.rs` | common | `SCHEMA_VERSION` → `"2.0.0"`. `HostInfo` rewritten polymorphic. Legacy `HostInfo::new` preserved with `host_type` inferred from `os`. New `::for_host_type()` canonical v2 constructor. `HostInfo::id()` back-compat accessor. `ResultEnvelope.observations: Vec<Observation>` added with `#[serde(default, skip_serializing_if)]`. Helpers `record_observation()` / `with_observations()`. |
-| `common/src/results/full.rs` | common | **Deleted** (v2.0.0 assessor-only refactor). `PolicyResult` itself lives in `assessor.rs` and is the per-policy entry in `AssessorPackage`. |
-| `common/src/results/attestation.rs` | common | **Deleted** (v2.0.0 assessor-only refactor). |
-| `common/src/results/builder.rs` | common | Stripped to `PolicyMetadata` + `AssessorInput` + `ResultBuilder::build_assessor_package`. `CheckInput`, `PolicyInput`, and the `build_attestation` / `build_full_result` / `build_both` / `build_all` methods removed. |
-| `common/src/results/mod.rs` | common | `pub mod observation;` declaration. Unconditional re-exports (no more `#[cfg(feature = ...)]`). `attestation` / `full` module declarations removed. `pub type AssessorResult = AssessorPackage` alias added. |
-| `common/Cargo.toml` | common | Removed `attestation`, `full-results`, `assessor-evidence` features. `[features]` is now `default = []`. |
-| `agent/src/output/mod.rs` | agent | `build_output` simplified — no `OutputFormat` match, always produces assessor JSON. `attestation` / `full` / `summary` module declarations removed. |
-| `agent/src/output/attestation.rs`, `full.rs`, `summary.rs` | agent | **Deleted.** |
-| `agent/src/config.rs` | agent | `OutputFormat` enum and `ScanConfig.output_format` field removed. |
-| `agent/src/cli.rs` | agent | `--format` / `-f` parsing removed. Help text updated — no OUTPUT FORMATS section. |
-| `agent/src/scanner.rs` | agent | `output::build_output(scan_results, host, config.output_format)` simplified to `output::build_output(scan_results, host)`. Output summary line shows literal `(assessor)`. |
-| `common/tests/vectors_v2/*.json` | common | New. 7 hand-written golden JSON files pinning the v2.0.0 wire shape. |
-| `common/tests/vectors_v2/README.md` | common | New. Invariants pinned + editing rules (no regeneration from live scans; attrs keys stay alphabetized). |
-| `common/tests/vectors_v2.rs` | common | New integration test. 11 tests: 6 round-trips + 5 shape invariants. |
-| `execution_engine/src/strategies/channel.rs` | execution_engine | `pub use common::results::{HostInfo, HostRef}` re-export. `Channel::identify_host()` trait method with default impl. `LocalChannel::identify_host` reads `/etc/machine-id` (or `/var/lib/dbus/machine-id`) with djb2-hostname fallback; populates hostname / os / arch / kernel in attrs. `os_family_label()` made `pub`. New tests `local_channel_identify_host_produces_vm_shape`, `local_channel_host_id_stable_across_calls`. |
-| `docs/09_ESP_Canonical_Schema_v2_0_0.md` | docs | New. 12-section normative spec for v2.0.0 envelopes. |
-| `docs/09_ESP_Canonical_Schema_v1_1_0.md` | docs | Status annotation: SUPERSEDED for new envelopes; enumerates v1.2 → v2.0.0 differences. v1.x body preserved intact. |
-| `docs/01_ESP_Overview_v1_0_0.md` | docs | v2.0.0 cross-reference banner after frontmatter. |
-| `docs/04_ESP_Type_System_v1_0_0.md` | docs | v2.0.0 cross-reference banner — clarifies `Value` is envelope-layer only, DSL types unchanged. |
-| `docs/06_ESP_Evaluation_Semantics_v1_0_0.md` | docs | v2.0.0 cross-reference banner — outcome semantics unchanged; evidence wire shape moves to `observations[]` + `observation_refs[]`. |
-| `docs/10_ESP_Trust_Model_v1_0_0.md` | docs | v2.0.0 cross-reference banner — two refinements: transport-attested host binding and explicit replay-hash invariants. |
-| `docs/12_ESP_Logging_v1_0_0.md` | docs | v2.0.0 cross-reference banner — additive `observation_uuid` field; channel-level events SHOULD include `channel_kind` / `target_resource_id`. |
+- v2.0.0 envelopes deserialize cleanly into v2.1.0 structs (the new
+  `replay_hash_version` field defaults to `1`). v2.1.0 envelopes can be
+  consumed by v2.0.0 readers too — the extra field is ignored.
+- Consumers reading `envelope.host.host_id` should handle
+  `host_type = "esp.scanner"`.
 
-### Backward Compatibility
+---
 
-- **Source-level:** existing callers of `HostInfo::new(id, hostname, os, arch)` continue to compile and produce semantically equivalent envelopes — `host_type` is inferred from `os`. The `.id()` method preserves read access to the renamed `host_id` field. `PolicyResult.evidence` is still writable for the transition window.
-- **Wire-level:** v1.x envelopes emitted by prior releases remain valid v1.x envelopes and are read by v1.x consumers unchanged. v2.0.0 envelopes are NOT backward-compatible: the new `host_type` discriminator and `observations[]` array are required fields. v1.x consumers reading v2.0.0 output will reject on the schema-version check.
-- **No migration tool is provided.** Archived v1.x envelopes are kept as-is; new scans emit v2.0.0. This is a deliberate design decision — migrating historical data would require synthesizing `host_type` / `host_id` for envelopes whose source transport is no longer available.
+## [2.0.0] — 2026-04-20
+
+**Schema v2.0.0 — Polymorphic hosts, first-class observations,
+transport-attested identity.**
+
+A major release. The ESP DSL is unchanged; the break is confined to the
+output envelope and the channel trait. v1.x envelopes remain readable by
+their original consumers; new scans emit v2.0.0.
+
+### Added
+
+- **Polymorphic host model.** `HostInfo` carries a `host_type`
+  discriminator (`linux.vm`, `azure.vm`, `aws.account`, `m365.tenant`,
+  ...) and a host-type-specific `attrs` map. Non-VM hosts omit VM-only
+  fields rather than emitting `null`.
+- **First-class observations.** `ResultEnvelope.observations[]` is the
+  top-level evidence array; `PolicyResult.observation_refs[]` cites them
+  by uuid. A single file read cited by ten policies now appears once in
+  `observations[]` and ten times in `observation_refs[]`.
+- **Transport-attested host identity.** `Channel::identify_host()` lets
+  the transport that actually reached the target supply the host shape,
+  so envelopes bind the compliance outcome to the **target** identity,
+  not the scanner's local environment.
+- **Canonical schema spec** `docs/09_ESP_Canonical_Schema_v2_1_1.md` and
+  hand-written wire-shape golden vectors pinning the v2.0.0 JSON shape.
+
+### Changed
+
+- Schema version `1.2.0` → `2.0.0`.
+- Legacy `HostInfo::new(id, hostname, os, arch)` is preserved and now
+  infers `host_type` from `os`, keeping existing call sites
+  source-compatible.
+
+### Removed
+
+- The three-way output matrix (attestation / full / assessor) collapses
+  to a single shape: **the assessor envelope is now the only output
+  type**. The attestation shape is a subset (drop `findings` /
+  `observations[]` on the consumer side for CUI-free transport).
+- CLI `--format` / `-f` flag, the corresponding agent output modules,
+  and the `attestation` / `full-results` / `assessor-evidence` Cargo
+  features are gone.
+
+### Behavior Change
+
+- Replay-hash invariants are now explicit: the hash excludes the `host`
+  block, `observations[]`, and all timestamps, so it remains stable
+  across scans of the same posture regardless of scan time, scanner
+  identity, or collecting channel.
+
+### Migration
+
+- **Source-level:** existing `HostInfo::new(...)` callers continue to
+  compile. New code should prefer
+  `HostInfo::for_host_type(host_type, host_id).with_hostname(...)`.
+- **Wire-level:** v2.0.0 envelopes are not backward-compatible with
+  v1.x consumers — the new `host_type` discriminator and
+  `observations[]` are required. Assert `schema_version == "2.0.0"` at
+  consumer entry points; route v1.x envelopes to a legacy reader.
+- Replace `--format <...>` agent invocations with post-processing of
+  the assessor JSON if a narrower shape is required.
 
 ### Security Notes
 
-- **Host binding is now attested by the transport that actually reached the target**, not by `HostInfo::from_system()` on the scanner box. An Azure Bastion scan emits `host_type: "azure.vm"` with `subscription_id` / `resource_group` / `target_resource_id` in `attrs`; an SSH scan emits `host_id: "ssh://<user>@<host>:<port>"`. An envelope now cryptographically binds the compliance outcome to the **target** identity, not the scanner identity.
-- **Replay-hash canonicalization is explicit and version-locked.** Schema §6 enumerates the excluded fields (host, observations, timestamps) and the canonical byte representation. Implementations that diverge from §6 produce invalid hashes — the test-vector round-trips (common/tests/vectors_v2.rs) catch silent serialization drift.
-- **`ObservationRef` bare-string serialization is pinned by vector test.** Removing `#[serde(transparent)]` would silently change `"uuid-abc"` to `{"uuid":"uuid-abc"}` on the wire and break every downstream consumer (SIEM ingester, OSCAL emitter, replay validator) without a Rust compile error. The `observation_ref_is_bare_string` test prevents this.
-
-### Migration Checklist (for downstream code)
-
-| Step | Action |
-|------|--------|
-| 1 | Update `common` dep to `2.0.0`. |
-| 2 | Replace `HostInfo::from_system()` call sites with `channel.identify_host()?` — the transport knows more about the target than the scanner's local environment does. |
-| 3 | When constructing `HostInfo` directly, prefer `HostInfo::for_host_type("linux.vm", host_id).with_hostname(...)` over the legacy 4-arg `::new()`. |
-| 4 | Stop reading `PolicyResult.evidence` in new code; switch to resolving `PolicyResult.observation_refs` against `ResultEnvelope.observations`. |
-| 5 | Assert `schema_version == "2.0.0"` explicitly at consumer entry points. v1.x envelopes should route to a legacy reader, not the v2 path. |
-| 6 | Remove any enablement of the old Cargo features (`attestation`, `full-results`, `assessor-evidence`) — `common` rejects them at build time. |
-| 7 | If you called `ResultBuilder::build_attestation` / `build_full_result` / `build_both` / `build_all`, switch to `build_assessor_package(policies, replay_hash, identity_status)`. Replace `CheckInput` / `PolicyInput` constructions with `AssessorInput`. |
-| 8 | If you shelled out to the agent with `--format <...>`, drop the flag — the agent now always emits `AssessorPackage`. Post-process the JSON if you need a narrower shape. |
+- Host binding is attested by the transport that reached the target,
+  not by `HostInfo::from_system()` on the scanner. An Azure Bastion
+  scan emits `host_type: "azure.vm"` with cloud identifiers in `attrs`;
+  an SSH scan emits `ssh://...` in `host_id`.
+- Replay-hash canonicalization is version-locked. Test-vector
+  round-trips catch silent serialization drift.
 
 ---
 
@@ -348,14 +446,14 @@ The Merkle-style tree rollup ensures that logical structure matters: `AND(A, B)`
 - **ESP Language Specification** (docs): Complete 12-document specification suite:
   - `01_ESP_Overview_v1_0_0.md` - Language introduction and concepts
   - `02_ESP_Lexical_Rules_v1_0_0.md` - Token definitions and lexical structure
-  - `03_ESP_Grammar_EBNF_v1_0_0.md` - Formal grammar specification
+  - `03_ESP_Grammar_EBNF_v2_1_0.md` - Formal grammar specification
   - `04_ESP_Type_System_v1_0_0.md` - Data types and type compatibility
   - `05_ESP_Symbol_Resolution_v1_0_0.md` - Symbol tables and reference resolution
   - `06_ESP_Evaluation_Semantics_v1_0_0.md` - Runtime evaluation rules
   - `07_ESP_Meta_Requirements_v1_0_0.md` - Structural requirements
   - `08_ESP_Error_Model_v1_0_0.md` - Error codes and handling
   - `09_ESP_Canonical_Schema_v1_0_0.md` - Output format specification
-  - `10_ESP_Trust_Model_v1_0_0.md` - Security boundaries and trust
+  - `10_ESP_Trust_Model_v1_2_0.md` - Security boundaries and trust
   - `11_ESP_Configuration_v1_0_0.md` - Build and runtime configuration
   - `12_ESP_Logging_v1_0_0.md` - Logging system specification
 - **Assessor Evidence Feature** (common): New `assessor-evidence` feature flag providing `AssessorPackage`, `AssessorPolicyResult`, `CollectionCommand`, and `ReproducibilityInfo` types for assessor-grade evidence packages with collection commands.

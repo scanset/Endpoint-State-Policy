@@ -236,7 +236,7 @@ pub trait CtnExecutor: Send + Sync {
 }
 ```
 
-📄 See [ESP Trust Model](../docs/10_ESP_Trust_Model_v1_0_0.md) for security boundaries.
+📄 See [ESP Trust Model](../docs/10_ESP_Trust_Model_v1_2_0.md) for security boundaries.
 
 ---
 
@@ -302,6 +302,38 @@ let exec_context = engine.resolve()?;
 let mut exec_engine = ExecutionEngine::new(exec_context, registry);
 let results = exec_engine.execute()?;
 ```
+
+### Inline CTN Execution (Discovery / Inventory)
+
+For **asset discovery and inventory enumeration**, where there's no
+audit-meaningful policy to attest about, the `inline` module skips the
+`.esp` → compiler → resolution → execution pipeline and dispatches
+directly to a registered CTN strategy:
+
+```rust
+use execution_engine::inline::InlineRequestBuilder;
+
+let result = InlineRequestBuilder::new("az_resource_list")
+    .field_string("subscription_id", "00000000-0000-0000-0000-000000000000")
+    .execute(&registry)?;
+
+// result.data is CollectedData — the caller wraps it in its own
+// envelope and signs it as discovery evidence.
+```
+
+What's skipped relative to the basic pipeline: `.esp` lexing/parsing,
+META validation, policy compilation, the criterion evaluation tree,
+and findings/outcome calculation. Use this **only** when the
+credential's grants define the scope and there is no pass/fail
+assertion to make. For evidence-gathering scans (asset-list /
+asset-internal policy assertions with pass/fail outcomes, control
+mappings, and audit context), continue to use the file-based pipeline
+above — that's what produces a complete `AssessorPackage`.
+
+Public API: [`inline::InlineRequest`](src/inline.rs),
+[`inline::InlineRequestBuilder`](src/inline.rs),
+[`inline::execute_inline`](src/inline.rs),
+[`inline::InlineResult`](src/inline.rs). Introduced post-v2.2.0.
 
 ## Execution Pipeline
 
@@ -458,14 +490,14 @@ Scan results and compliance findings are handled by the `common` crate's results
 |----------|-------------|
 | [ESP Overview](../docs/01_ESP_Overview_v1_0_0.md) | Language introduction and concepts |
 | [Lexical Rules](../docs/02_ESP_Lexical_Rules_v1_0_0.md) | Token definitions and lexical structure |
-| [Grammar EBNF](../docs/03_ESP_Grammar_EBNF_v1_0_0.md) | Complete grammar specification |
+| [Grammar EBNF](../docs/03_ESP_Grammar_EBNF_v2_1_0.md) | Complete grammar specification |
 | [Type System](../docs/04_ESP_Type_System_v1_0_0.md) | Data types and type compatibility |
 | [Symbol Resolution](../docs/05_ESP_Symbol_Resolution_v1_0_0.md) | Symbol tables and reference resolution |
 | [Evaluation Semantics](../docs/06_ESP_Evaluation_Semantics_v1_0_0.md) | Runtime evaluation rules |
 | [Meta Requirements](../docs/07_ESP_Meta_Requirements_v1_0_0.md) | Structural requirements |
 | [Error Model](../docs/08_ESP_Error_Model_v1_0_0.md) | Error codes and handling |
 | [Canonical Schema](../docs/09_ESP_Canonical_Schema_v1_0_0.md) | Output format specification |
-| [Trust Model](../docs/10_ESP_Trust_Model_v1_0_0.md) | Security boundaries and trust |
+| [Trust Model](../docs/10_ESP_Trust_Model_v1_2_0.md) | Security boundaries and trust |
 | [Configuration](../docs/11_ESP_Configuration_v1_0_0.md) | Build and runtime configuration |
 | [Logging](../docs/12_ESP_Logging_v1_0_0.md) | Logging system specification |
 

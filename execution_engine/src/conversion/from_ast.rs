@@ -305,6 +305,7 @@ fn convert_ctn_to_declaration(
         test: ctn_node.test.clone(),
         state_refs: ctn_node.state_refs.clone(),
         object_refs: ctn_node.object_refs.clone(),
+        set_refs: ctn_node.set_refs.clone(),
         local_states,
         local_object,
         ctn_node_id: None,

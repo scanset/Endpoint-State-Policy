@@ -1,6 +1,6 @@
 use super::object::{ObjectDeclaration, ResolvedObject};
 use super::state::{ResolvedState, StateDeclaration};
-use common::ast::nodes::{ObjectRef, StateRef, TestSpecification};
+use common::ast::nodes::{ObjectRef, SetRef, StateRef, TestSpecification};
 use serde::{Deserialize, Serialize};
 
 /// CTN node identifier for tracking local symbol scopes
@@ -17,6 +17,11 @@ pub struct CriterionDeclaration {
     pub state_refs: Vec<StateRef>, // Using compiler's type
     /// Object references (optional, multiple allowed)
     pub object_refs: Vec<ObjectRef>, // Using compiler's type
+    /// Set references (optional, multiple allowed). Resolved at execution
+    /// time into the underlying object references via `set_expansion`.
+    /// See `set_expansion::expand_ctn_level_set_refs`.
+    #[serde(default)]
+    pub set_refs: Vec<SetRef>,
     /// Local states (CTN-level, non-referenceable)
     pub local_states: Vec<StateDeclaration>,
     /// Local object (CTN-level, non-referenceable, max 1)
@@ -93,6 +98,7 @@ impl CriterionDeclaration {
             test,
             state_refs,
             object_refs,
+            set_refs: Vec::new(),
             local_states,
             local_object,
             ctn_node_id: None,
@@ -137,6 +143,7 @@ impl CriterionDeclaration {
             test: node.test.clone(), // Using compiler type directly
             state_refs: node.state_refs.clone(), // Using compiler type directly
             object_refs: node.object_refs.clone(), // Using compiler type directly
+            set_refs: node.set_refs.clone(),
             local_states,
             local_object,
             ctn_node_id: Some(ctn_node_id),

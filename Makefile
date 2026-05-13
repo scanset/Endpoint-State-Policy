@@ -1,7 +1,7 @@
 # ESP Monorepo Makefile
 # Provides convenient commands for development, testing, and building
 
-.PHONY: help build build-all build-libs test lint clean check security audit format docs dev release
+.PHONY: help build build-all build-libs test lint clean check security audit deny sbom build-auditable format docs dev release
 
 # Default target
 help:
@@ -29,9 +29,11 @@ help:
 	@echo "  make format-check - Check code formatting"
 	@echo ""
 	@echo "Security:"
-	@echo "  make security     - Run all security checks"
-	@echo "  make audit        - Check for vulnerabilities"
-	@echo "  make deny         - Check dependency policies"
+	@echo "  make security     - Run all security checks (audit + deny + sbom)"
+	@echo "  make audit        - Check for vulnerabilities (cargo-audit)"
+	@echo "  make deny         - Check dependency policies (cargo-deny)"
+	@echo "  make sbom         - Regenerate CycloneDX SBOM at docs/sbom/"
+	@echo "  make build-auditable - Release build with embedded SBOM (cargo-auditable)"
 	@echo ""
 	@echo "Documentation:"
 	@echo "  make docs         - Generate and open documentation"
@@ -124,16 +126,41 @@ format-check:
 # Security
 # =============================================================================
 
-security: audit deny
+# Full security gate: vulnerability scan + dependency policy + SBOM
+# Implements NIST SP 800-218 SSDF tasks PW.4.4 (verify components),
+# PW.8.2 (automated vulnerability detection), PS.3.2 (component provenance).
+security: audit deny sbom
 
 audit:
-	cargo audit
+	@which cargo-audit > /dev/null && cargo audit || \
+		(echo "cargo-audit not found. Run: make install-tools" && exit 1)
 
 deny:
-	@echo "Note: cargo-deny requires Rust 1.85+"
-	@echo "Install with: cargo install cargo-deny"
 	@which cargo-deny > /dev/null && cargo deny check || \
-		echo "cargo-deny not found. Run in CI/CD or install Rust 1.85+"
+		(echo "cargo-deny not found. Run: make install-tools" && exit 1)
+
+# Generate per-crate CycloneDX SBOMs and stage them under docs/sbom/.
+# Implements NIST SP 800-218 SSDF PS.3.2 (provenance for components).
+# cargo-cyclonedx 0.5+ writes each SBOM next to its crate's Cargo.toml;
+# we relocate them after generation so all SBOMs live in one place.
+sbom:
+	@which cargo-cyclonedx > /dev/null || \
+		(echo "cargo-cyclonedx not found. Run: make install-tools" && exit 1)
+	@mkdir -p docs/sbom
+	cargo cyclonedx --format json --spec-version 1.5 --quiet
+	@find . -maxdepth 3 -name '*.cdx.json' -not -path './target/*' -not -path './docs/*' \
+		-exec mv {} docs/sbom/ \;
+	@echo "Generated SBOMs:"
+	@ls -1 docs/sbom/*.cdx.json
+
+# Release build with embedded dependency tree (cargo-auditable)
+# Compiled binaries can be re-audited post-distribution with `cargo audit bin <binary>`.
+# Implements NIST SP 800-218 SSDF PW.4.4 (ongoing component verification) and
+# RV.1.1 (ongoing vulnerability monitoring of deployed software).
+build-auditable:
+	@which cargo-auditable > /dev/null && \
+		ESP_BUILD_PROFILE=production cargo auditable build --release --workspace || \
+		(echo "cargo-auditable not found. Run: make install-tools" && exit 1)
 
 # =============================================================================
 # Documentation
@@ -186,8 +213,14 @@ ci: format-check lint test-all security
 # =============================================================================
 
 # Install development tools
+# Security/SBOM tooling supports NIST SP 800-218 SSDF compliance:
+#   cargo-audit       - PW.8.2 / RV.1.1 vulnerability scanning
+#   cargo-deny        - PS.3.2 / PW.4.4 license + source verification
+#   cargo-cyclonedx   - PS.3.2 SBOM generation (CycloneDX)
+#   cargo-auditable   - PW.4.4 binary-embedded dependency provenance
 install-tools:
-	cargo install cargo-audit cargo-outdated cargo-watch cargo-tree cargo-bloat
+	cargo install cargo-audit cargo-deny cargo-cyclonedx cargo-auditable \
+		cargo-outdated cargo-watch cargo-tree cargo-bloat
 
 # =============================================================================
 # Watch Mode (Development)

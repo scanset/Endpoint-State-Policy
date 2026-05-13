@@ -39,8 +39,9 @@ Add to your `Cargo.toml`:
 common = { path = "../common" }
 ```
 
-As of v2.0.0 there are no Cargo feature gates on the `results` module — the
-`AssessorPackage` envelope is the only output shape and is always compiled in.
+Since v2.0.0 (unchanged through v2.2.1) there are no Cargo feature gates
+on the `results` module — the `AssessorPackage` envelope is the only
+output shape and is always compiled in.
 
 
 ## Quick Start
@@ -191,8 +192,8 @@ Key types: `compile_time::*` constants, `RuntimeConfig`, `LoggingPreferences`
 
 ### results
 
-Scan result types. As of v2.0.0 the crate emits exactly one output shape:
-`AssessorPackage`. The previous `attestation` / `full-results` /
+Scan result types. Since v2.0.0 the crate emits exactly one output
+shape: `AssessorPackage`. The previous `attestation` / `full-results` /
 `assessor-evidence` feature matrix has been removed — the assessor shape
 is already a superset of the others.
 
@@ -400,7 +401,7 @@ use common::results::{hash_content, sha256_hash, hex_encode, hex_decode};
 
 ## Feature Flags
 
-None. As of v2.0.0 the `results` module has no Cargo features — the
+None. Since v2.0.0 the `results` module has no Cargo features — the
 `AssessorPackage` envelope is the only output shape and is always compiled in.
 See `CHANGELOG [2.0.0]` for the rationale behind removing the previous
 `attestation` / `full-results` / `assessor-evidence` matrix.

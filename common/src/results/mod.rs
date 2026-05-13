@@ -35,7 +35,7 @@
 //! ## Schema Version
 //!
 //! This module implements ESP v2.0.0 Canonical Execution Schema
-//! (`docs/09_ESP_Canonical_Schema_v2_0_0.md`). Key structural points:
+//! (`docs/09_ESP_Canonical_Schema_v2_1_1.md`). Key structural points:
 //! - Polymorphic `HostInfo` with free-string `host_type` discriminator
 //! - Top-level `observations[]` on `ResultEnvelope` (evidence as entity)
 //! - `PolicyResult.observation_refs[]` replaces inline per-policy `evidence`

@@ -23,6 +23,10 @@
 >
 > Neither is a breaking change. Existing v1.x log consumers continue to
 > parse v2.0.0 logs without modification.
+>
+> **v2.1.0 / v2.2.0 / v2.2.1** add no further logging refinements.
+> The event model, codes, and severity rules in this document remain
+> normative for the current crate version (`2.2.1`).
 
 ---
 

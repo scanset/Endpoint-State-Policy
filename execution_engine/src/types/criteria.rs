@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Tree structure for nested criteria evaluation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum CriteriaTree {
     /// Leaf node - actual CTN
     Criterion {

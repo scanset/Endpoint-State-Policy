@@ -6,13 +6,14 @@
 
 ---
 
-> **v2.0.0 cross-reference.** The core trust principle stated in §1.1
+> **v2.x cross-reference.** The core trust principle stated in §1.1
 > (ESP does not trust inputs, does not infer truth, does not leak
 > evidence) is **unchanged**. The forensic-chain guarantees in §1.2
-> (what/how/state as a replay hash) are also **unchanged** — the hash
-> algorithm, canonicalization rules, and signing boundary are the same.
+> (what/how/state as a replay hash) are **unchanged** for the default
+> v1 hash scheme — algorithm, canonicalization rules, and signing
+> boundary are the same.
 >
-> Two v2.0.0 refinements to call out:
+> v2.0.0 refinements:
 >
 > 1. **Host binding is now transport-attested.** The `ResultEnvelope.host`
 >    field is populated by `Channel::identify_host()` — the transport
@@ -23,16 +24,50 @@
 >    emits `host_id: "ssh://<user>@<host>:<port>"`. The envelope attests
 >    about the **target**, not the scanner.
 >
-> 2. **Replay-hash invariants are explicit.** v2.0.0 §6 of
->    `docs/09_ESP_Canonical_Schema_v2_0_0.md` enumerates what is
+> 2. **Replay-hash invariants are explicit.** §3.2 of
+>    `docs/09_ESP_Canonical_Schema_v2_1_1.md` enumerates what is
 >    excluded from the replay hash (host block, observations[],
 >    timestamps) so the hash remains stable across scans of the same
 >    posture regardless of when or from where the scan ran. The
 >    forensic chain threads through observation `content_hash` values,
 >    not inline evidence blobs.
 >
-> The v1.2 attestation / full / assessor outputs and their signing rules
-> are carried forward unchanged in v2.0.0.
+> 3. **Output formats collapsed.** v2.0.0 removed the `attestation` /
+>    `full-results` / `assessor-evidence` Cargo feature matrix described
+>    in §7 of this document. `AssessorPackage` is the sole output
+>    envelope. Sensitivity tiers are achieved by post-processing the
+>    assessor JSON (drop `observations[]` for attestation-equivalent
+>    output; drop `observations[].body` + `findings` for
+>    summary-equivalent output).
+>
+> v2.1.0 refinement:
+>
+> 4. **Wire schema bumped to `2.1.0`** with an additive
+>    `replay_hash_version: u8` field on `ResultEnvelope`. Defaults to
+>    `1` (the v2.0.0 hash scheme) via `#[serde(default)]`. v2.0.0
+>    envelopes deserialize cleanly into v2.1.0 readers and vice versa.
+>
+> v2.2.0 refinement:
+>
+> 5. **v2 per-OBJECT replay hash scheme (opt-in).** A second hash scheme
+>    is selectable via `ReplayManifest::with_replay_hash_version(2)` and
+>    `compute_replay_hash_v2()`. The v1 scheme hashes one combined
+>    `(intent, contract, outcome)` per criterion; v2 hashes
+>    `(intent, contract, outcome)` per **(criterion, OBJECT)** pair.
+>    Asset-internal OBJECTs (same template across many hosts, e.g. an
+>    RPM check on RHEL9) collapse to one hash; asset-list OBJECTs
+>    (distinct cloud resource per OBJECT) get one hash per asset. This
+>    enables per-asset drift detection and remediation verification
+>    without losing dedup. Cross-version hash comparison (v1 vs v2) is
+>    not meaningful — consumers MUST record `replay_hash_version`
+>    alongside the hash. The v1 scheme remains the default; existing
+>    envelopes and callers are unaffected.
+>
+> **Body of this document still describes the v1.2 trust model.** §7
+> (Result Trust Boundaries) in particular references the v1.x three-
+> format output matrix and `schema v1.2.0`. Treat §7 as historical;
+> §0 of the canonical-schema doc is the current normative text for the
+> result envelope shape and replay-hash canonicalization.
 
 ---
 
@@ -297,100 +332,113 @@ Security boundaries cannot be relaxed at runtime.
 
 ## 7. Result Trust Boundaries (N-22)
 
+> **v2.x note.** This section was rewritten for v2.0.0+. The v1.x
+> three-format output matrix (`attestation` / `full-results` /
+> `assessor-evidence` behind Cargo features) is gone. The agent emits
+> exactly one envelope shape — `AssessorPackage` — and sensitivity
+> filtering moved to the consumer pipeline.
+
 ### 7.1 Output Architecture
 
-All output formats share a common `ResultEnvelope` (schema v1.2.0) that carries the replay hash, agent and host identity, timing, optional signature, and identity status. Three feature-gated output formats are defined, each exposing progressively more sensitive data:
+The agent emits a single signed envelope, `AssessorPackage`, carrying
+the full result of a scan: policy outcomes, observations, findings,
+reproducibility info, the replay hash, and (optionally) the signature
+block and identity status.
 
 ```
-ScanResult (per policy)
+Scan execution
          │
          ▼
 ┌─────────────────────────────────────────────────────────┐
 │                   RESULT BUILDER                        │
 │                                                         │
 │  ┌─────────────────────────────────────────────────┐   │
-│  │              ResultEnvelope (shared)             │   │
-│  │  result_id, schema_version                       │   │
-│  │  agent, host                                     │   │
-│  │  started_at, completed_at                        │   │
-│  │  replay_hash  ◄── single hash, all formats       │   │
-│  │  identity_status                                 │   │
-│  │  signature (optional)                            │   │
+│  │              AssessorPackage                     │   │
+│  │  envelope: ResultEnvelope                        │   │
+│  │    ├ result_id, schema_version, agent, host      │   │
+│  │    ├ started_at, completed_at                    │   │
+│  │    ├ replay_hash + replay_hash_version           │   │
+│  │    ├ identity_status                             │   │
+│  │    ├ signature (optional)                        │   │
+│  │    └ observations[]   ◄── top-level evidence     │   │
+│  │  policies[]: PolicyResult                        │   │
+│  │    ├ policy identity, outcome, counts            │   │
+│  │    ├ control_mappings                            │   │
+│  │    ├ observation_refs[] (cite into envelope)     │   │
+│  │    └ findings[] (validation failures)            │   │
+│  │  reproducibility: ReproducibilityInfo            │   │
 │  └─────────────────────────────────────────────────┘   │
-│                          │                              │
-│      ┌───────────────────┼───────────────────┐          │
-│      ▼                   ▼                   ▼          │
-│  ┌──────────┐    ┌─────────────┐    ┌──────────────┐   │
-│  │Attestation│   │ Full Result │    │   Assessor   │   │
-│  │(CUI-free) │   │  (w/ CUI)   │    │   Package    │   │
-│  └──────────┘    └─────────────┘    │(CUI+commands)│   │
-│                                     └──────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 7.2 Output Format Classification
+### 7.2 Envelope Contents
 
-| Format | CUI | Network Safe | Use Case |
-|--------|-----|--------------|----------|
-| Attestation | No | Yes | SaaS dashboards, SIEM/SOAR, CI/CD signals |
-| Full Results | Yes | No | Local remediation, incident response |
-| Assessor Package | Yes | No | Auditor verification, evidence reproduction |
+| Section | Contents |
+|---|---|
+| `envelope` (ResultEnvelope) | Scan-level identity, timing, replay hash, signature, identity status, observation array |
+| `policies[]` | Per-policy outcome, criteria counts, control mappings, observation references, findings |
+| `reproducibility` | Collection commands and inputs enabling an assessor to independently re-run the scan |
 
-### 7.3 Content Classification
+### 7.3 Sensitivity Tiers via Consumer Filtering
 
-| Data Type | Classification | Attestation | Full | Assessor |
-|-----------|----------------|-------------|------|----------|
-| Policy ID | Metadata | ✓ | ✓ | ✓ |
-| Outcome | Metadata | ✓ | ✓ | ✓ |
-| Criticality | Metadata | ✓ | ✓ | ✓ |
-| Control mappings | Metadata | ✓ | ✓ | ✓ |
-| Weight | Metadata | ✓ | ✓ | ✓ |
-| Replay hash | Metadata | ✓ | ✓ | ✓ |
-| Identity status | Metadata | ✓ | ✓ | ✓ |
-| Host ID | Metadata | ✓ | ✓ | ✓ |
-| Findings | CUI | ✗ | ✓ | ✓ |
-| Expected values | CUI | ✗ | ✓ | ✓ |
-| Actual values | CUI | ✗ | ✓ | ✓ |
-| Evidence data | CUI | ✗ | ✓ | ✓ |
-| Collection target | CUI | ✗ | ✓ | ✓ |
-| Collection command | CUI | ✗ | ✗ | ✓ |
-| Collection inputs | CUI | ✗ | ✗ | ✓ |
-| Reproducibility info | CUI | ✗ | ✗ | ✓ |
+The envelope shape is fixed, but consumers can derive narrower views by
+dropping fields before transmission. Two well-known filter recipes:
 
-### 7.4 Attestation Format (SaaS-Safe)
+| Recipe | Drop from envelope | Resulting view |
+|---|---|---|
+| **Attestation-equivalent** | `observations[]`, `policies[].findings`, `policies[].observation_refs`, `reproducibility` | Identity, outcome, control mappings, replay hash, signature only |
+| **Summary-equivalent** | `observations[].body`, `policies[].findings` | Identity, outcome, observation metadata + content hashes, replay hash, signature |
 
-Attestations carry only CUI-free metadata and the replay hash. They are safe for network transport and SaaS processing. SaaS platforms can compute compliance posture scores, trigger SIEM/SOAR alerts, and correlate with other security signals — without accessing or being liable for CUI.
+The replay hash is computed over `(intent, contract, outcome)` only,
+so it is **stable under both filters**: an attestation-equivalent
+extract carries the same `replay_hash` as the full envelope. A
+verifier holding only the attestation-equivalent extract can still
+confirm correspondence to a full envelope by hash equality.
 
-The replay hash in the attestation envelope allows a verifier to confirm that an attestation corresponds to a specific set of full results, without requiring the full results to be transmitted.
+### 7.4 Pre-filter vs Post-filter Signing
 
-**SaaS Liability Protection:**
+The signature in the `envelope.signature` block covers the
+unfiltered envelope. A consumer that applies a filter and re-signs the
+result is producing a *different* attestation that no longer chains
+through the agent's signature. Two patterns are supported:
 
-Attestations are designed so that SaaS platforms:
-- Can compute compliance posture scores
-- Can trigger SIEM/SOAR alerts
-- Can correlate with other security signals
-- **Cannot** access or be liable for CUI
+- **Forward the original signature.** Transmit the filter extract
+  alongside the original `signature` block. Downstream verifiers
+  rehydrate the unfiltered envelope from a local archive (or refuse
+  to verify without it) and confirm signature over the full shape.
+- **Counter-sign the filter extract.** The consumer's pipeline signs
+  the filtered extract with its own key. The chain becomes
+  `agent_signature(full) → consumer_signature(extract)`; downstream
+  verifiers trust the consumer's key, not the agent's.
 
-### 7.5 Full Results (Local-Only)
+The trust model takes no position on which pattern is correct — that
+depends on the consumer's PKI and retention policy. It does require
+that the choice be explicit. A pipeline that strips fields from a
+signed envelope and forwards the original signature *without
+preserving the unfiltered envelope somewhere verifiable* breaks the
+forensic chain.
 
-Full results contain CUI and are for local storage only. They are not transmitted over the network by default. Access is controlled by the customer, with retention governed by customer-defined policies.
+### 7.5 Security Guarantee
 
-### 7.6 Assessor Package (Auditor Access)
+The guarantee provided by the agent is:
 
-Assessor packages add collection traceability and reproducibility. They include the exact commands executed, the input parameters used, and sufficient information for an assessor to independently re-run the collection and verify that the outcome matches the signed attestation. This closes the forensic chain: the assessor is not required to trust the collector — they can reproduce the evidence themselves.
+1. The envelope as emitted is signed; tampering with any covered
+   field breaks the signature.
+2. The replay hash is invariant under the documented filter recipes;
+   filtered extracts remain verifiably linked to their unfiltered
+   originals via hash equality.
+3. The reproducibility block enables an assessor to independently
+   re-run the collection and confirm that the outcome they observe
+   matches the outcome signed by the agent.
 
-**Package Metadata:**
-```json
-{
-  "format_version": "1.2.0",
-  "contains_cui": true,
-  "distribution": "Internal use only - contains CUI"
-}
-```
+The guarantee the agent does **not** provide:
 
-### 7.7 Security Guarantee
-
-Sensitive system information is never transmitted by default. CUI remains under customer control. The replay hash provides a verifiable, tamper-evident link between the CUI-free attestation and the locally-held full results.
+- That sensitive fields are absent from network traffic. The agent
+  emits an envelope that contains them; the consumer pipeline is
+  responsible for filtering before transmission. This is a deliberate
+  trade-off relative to v1.x, where the format split was binary-level
+  containment. v2.x consolidates surface area at the cost of moving
+  the leakage boundary to the consumer's pipeline.
 
 ---
 
@@ -711,9 +759,8 @@ Compliance results are explainable, reproducible, and defensible.
 │                        ▼                                             │
 │  ┌──────────────────────────────────────┐                            │
 │  │         Controlled Disclosure         │                            │
-│  │  • Attestation (SaaS-safe, CUI-free)  │                            │
-│  │  • Full Results (local-only)          │                            │
-│  │  • Assessor Package (auditor access)  │                            │
+│  │  • Signed AssessorPackage envelope    │                            │
+│  │  • Observations cited by uuid         │                            │
 │  │  • Audit logging (mandatory)          │                            │
 │  └──────────────────────────────────────┘                            │
 │                                                                      │
@@ -811,8 +858,8 @@ ESP's trust model aligns with NIST Secure Software Development Framework:
 
 | Guarantee | Implication |
 |-----------|-------------|
-| CUI-free attestations | No liability for sensitive data |
-| Replay hash binding | Verifiable link to full results |
+| Documented filter recipe | Consumer pipeline can derive attestation-equivalent extracts |
+| Replay hash binding | Filtered extracts verifiably link to unfiltered envelope |
 | Signature verification | Result authenticity confirmation |
 | Identity status | PKI bootstrap state observable in envelope |
 
@@ -820,9 +867,9 @@ ESP's trust model aligns with NIST Secure Software Development Framework:
 
 | Guarantee | Implication |
 |-----------|-------------|
-| SIEM/SOAR signals | Attestations provide alerting data |
+| SIEM/SOAR signals | Filtered extracts provide alerting data |
 | Posture scores | Weight-based compliance metrics |
-| Evidence retrieval | Full results available locally |
+| Observation array | Evidence available without per-policy duplication |
 | Mandatory audit | Security events always captured |
 | Reproducibility | Results are deterministic |
 
@@ -830,11 +877,10 @@ ESP's trust model aligns with NIST Secure Software Development Framework:
 
 | Guarantee | Implication |
 |-----------|-------------|
-| Assessor packages | Full evidence with collection commands |
 | Reproducibility info | Can re-run collection operations independently |
-| Package metadata | Clear CUI handling requirements |
-| Replay hash | Verify attestation/full result correspondence |
+| Replay hash | Verify extract / envelope correspondence |
 | Signature chain | Independently verify result authenticity |
+| Observation content hash | Tamper-evidence on individual evidence items |
 
 ---
 

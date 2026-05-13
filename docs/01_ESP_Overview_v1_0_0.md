@@ -19,8 +19,21 @@
 >   `PolicyResult.observation_refs[]`.
 >
 > The full v2.0.0 envelope specification is in
-> `docs/09_ESP_Canonical_Schema_v2_0_0.md`. Sections 4–7 of that document
+> `docs/09_ESP_Canonical_Schema_v2_1_1.md`. Sections 4–7 of that document
 > supersede the result-format tables here for v2.0.0 output.
+>
+> **v2.1.0** extends the DSL grammar: `SET_REF` is now a first-class
+> CTN content operand, letting an asset-list policy reference its
+> bound-asset list as a single SET block (see EBNF §7 and Symbol
+> Resolution). The wire schema additively bumps to `2.1.0` with a new
+> `replay_hash_version` field on `ResultEnvelope` (back-compat).
+>
+> **v2.2.0** adds an opt-in per-OBJECT replay hash scheme
+> (`replay_hash_version = 2`). v1 hash semantics are unchanged and
+> remain the default.
+>
+> **v2.2.1** is a hotfix for the agentless CTN-collection timeout —
+> see `ESP_CTN_TIMEOUT_SECS` in the Configuration document.
 
 ---
 
@@ -79,16 +92,13 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 | **AST** | Abstract Syntax Tree produced by the compiler |
 | **ScanResult** | Result of executing a single policy |
 | **CTN** | Criterion Type Node — a single compliance check unit |
-| **CUI** | Sensitive system configuration data |
 | **Pass** | Compliance check succeeded |
 | **Fail** | Compliance check found non-compliance |
 | **Error** | Compliance check could not complete |
-| **Summary** | Minimal output with pass/fail counts |
-| **Attestation** | CUI-free result safe for SaaS and network transport |
-| **Full Results** | Complete results with evidence (local storage only) |
-| **Assessor Package** | Full results with reproducibility info (auditor access) |
-| **ResultEnvelope** | Common wrapper with metadata and signature block |
-| **Evidence Hash** | SHA-256 hash linking attestation to full results |
+| **AssessorPackage** | The sole output envelope; carries policy outcomes, observations, findings, reproducibility info, and the signed `ResultEnvelope` |
+| **ResultEnvelope** | Inner envelope: identity, timing, replay hash, signature, observation array |
+| **Observation** | One act of data collection against a host, addressable by uuid and content hash |
+| **Replay Hash** | Deterministic hash of `(intent, contract, outcome)` per policy, stable across runs of identical posture |
 
 ---
 
@@ -132,9 +142,8 @@ An implementation conforms to this specification if it satisfies all MUST and MU
 4. **Deterministic Evaluation** — Same policy + same state = same result
 5. **Compliance-Ready Output** — Results mappable to standard formats
 6. **Trust Boundaries** — Inputs untrusted, outputs controlled
-7. **CUI Separation** — Sensitive data isolated from attestations
-8. **Verifiable Results** — Evidence hash links attestation to full results
-9. **Single Envelope** — All policies in one result, regardless of input count
+7. **Verifiable Results** — Replay hash binds outcome to compiled intent + collected evidence
+8. **Single Envelope** — One `AssessorPackage` carries every policy in a scan; sensitivity tiers are derived by consumer-side filtering, not by separate output formats
 
 ---
 
@@ -176,21 +185,11 @@ ESP Policy File(s) (.esp)
            │
            ▼
 ┌─────────────────────┐
-│   Result Builder    │  ScanResults → Output Format
-│ (Results → Output)  │
+│   Result Builder    │  ScanResults → AssessorPackage
 └──────────┬──────────┘
            │
-           ├──▶ Summary (minimal, CI/CD pipelines)
-           │    └── Pass/fail counts, no evidence
-           │
-           ├──▶ Attestation (CUI-free, SaaS-safe)
-           │    └── For SIEM/SOAR alerting, compliance dashboards
-           │
-           ├──▶ Full Results (with evidence, local-only)
-           │    └── For remediation, incident response
-           │
-           └──▶ Assessor Package (with reproducibility)
-                └── For auditor verification, evidence reproduction
+           ▼
+   AssessorPackage (single signed envelope)
 ```
 
 ### 8.2 Data Flow
@@ -200,51 +199,40 @@ ESP Policy File(s) (.esp)
 | Compilation | `.esp` file | Validated AST | Untrusted → Trusted |
 | Resolution | AST | ExecutionContext | Trusted |
 | Execution | ExecutionContext | ScanResult | Trusted |
-| Result Building | ScanResult[] | Output Format | Controlled Disclosure |
+| Result Building | ScanResult[] | AssessorPackage | Controlled Disclosure |
 
 ### 8.3 Result Architecture
 
+The agent emits a single signed `AssessorPackage` envelope per scan.
+The envelope shape is fixed; consumers derive narrower views by
+post-emission filtering (see §10).
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     ResultEnvelope                          │
+│                     AssessorPackage                         │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ result_id, schema_version                            │   │
-│  │ agent: { id, name, version, agent_type }             │   │
-│  │ host: { id, hostname, os, arch }                     │   │
-│  │ started_at, completed_at                             │   │
-│  │ content_hash, evidence_hash                          │   │
-│  │ signature: { algorithm, key_id, value, signed_at }   │   │
+│  │ envelope: ResultEnvelope                             │   │
+│  │   ├ result_id, schema_version                        │   │
+│  │   ├ agent: { id, name, version, agent_type }         │   │
+│  │   ├ host: { host_type, host_id, attrs, … }           │   │
+│  │   ├ started_at, completed_at                         │   │
+│  │   ├ replay_hash + replay_hash_version                │   │
+│  │   ├ identity_status                                  │   │
+│  │   ├ signature: { algorithm, key_id, value, … }       │   │
+│  │   └ observations[]   (top-level evidence array)      │   │
+│  └─────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ policies[]: PolicyResult                             │   │
+│  │   ├ policy_id, outcome, criticality                  │   │
+│  │   ├ counts, control_mappings                         │   │
+│  │   ├ observation_refs[] (cite into envelope)          │   │
+│  │   └ findings[] (validation failures)                 │   │
+│  └─────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ reproducibility: ReproducibilityInfo                 │   │
+│  │   collection commands and inputs                     │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
-                              │
-      ┌───────────────────────┼───────────────────────┐
-      ▼                       ▼                       ▼
-┌───────────┐        ┌──────────────┐        ┌──────────────┐
-│  Summary  │        │ Attestation  │        │  FullResult  │
-├───────────┤        ├──────────────┤        ├──────────────┤
-│ + agent   │        │ + envelope   │        │ + envelope   │
-│ + summary │        │ + summary    │        │ + summary    │
-│ + policies│        │ + checks[]   │        │ + policies[] │
-│   (counts)│        │   ├─ identity│        │   ├─ identity│
-│           │        │   ├─ outcome │        │   ├─ outcome │
-│           │        │   └─ weight  │        │   ├─ weight  │
-│           │        │              │        │   ├─ findings│
-│           │        │(no evidence) │        │   └─ evidence│
-└───────────┘        └──────────────┘        └──────────────┘
-                            │                       │
-                            └───── evidence_hash ───┘
-                                  (must match)
-                                        │
-                                        ▼
-                              ┌──────────────────┐
-                              │ AssessorPackage  │
-                              ├──────────────────┤
-                              │ + envelope       │
-                              │ + summary        │
-                              │ + policies[]     │
-                              │   └─ + repro     │
-                              │ + package_info   │
-                              └──────────────────┘
 ```
 
 ---
@@ -256,12 +244,9 @@ ESP Policy File(s) (.esp)
 | meta-block.schema.json | META block validation |
 | policy-identity.schema.json | Policy identity fields |
 | ctn-contract.schema.json | CTN contract definitions |
-| result-envelope.schema.json | Common envelope with signature |
-| scan-summary.schema.json | Aggregate statistics |
-| summary-result.schema.json | Minimal CI/CD output |
-| attestation-result.schema.json | CUI-free attestation output |
-| full-result.schema.json | Full results with evidence |
-| assessor-package.schema.json | Assessor package with reproducibility |
+| result-envelope.schema.json | Inner `ResultEnvelope` shape |
+| assessor-package.schema.json | The sole output envelope |
+| observation.schema.json | Top-level `observations[]` items |
 | collection-method.schema.json | Collection method traceability |
 | compliance-finding.schema.json | Finding details |
 
@@ -269,62 +254,57 @@ All schemas conform to JSON Schema Draft 2020-12.
 
 ---
 
-## 10. Output Formats
+## 10. Output
 
-### 10.1 Format Selection
+### 10.1 Single Envelope
 
-| Format | CLI Flag | Default Filename |
-|--------|----------|------------------|
-| Summary | `--format summary` | `summary.json` |
-| Attestation | `--format attestation` | `attestation.json` |
-| Full Results | `--format full` (default) | `results.json` |
-| Assessor Package | `--format assessor` | `assessor_package.json` |
+Since v2.0.0 the agent emits exactly one shape: `AssessorPackage`.
+There is no `--format` flag; output is always the full assessor
+envelope. The unfiltered envelope is what the agent signs.
 
-### 10.2 Output Content Matrix
+### 10.2 Sensitivity Tiers via Consumer Filtering
 
-| Content | Summary | Attestation | Full | Assessor |
-|---------|---------|-------------|------|----------|
-| Policy ID | ✓ | ✓ | ✓ | ✓ |
-| Outcome (pass/fail) | ✓ | ✓ | ✓ | ✓ |
-| Criticality | ✓ | ✓ | ✓ | ✓ |
-| Criteria counts | ✓ | ✗ | ✗ | ✗ |
-| Control mappings | ✗ | ✓ | ✓ | ✓ |
-| Weight | ✗ | ✓ | ✓ | ✓ |
-| Evidence hash | ✗ | ✓ | ✓ | ✓ |
-| Host ID | ✗ | ✓ | ✓ | ✓ |
-| Signature block | ✗ | ✓ | ✓ | ✓ |
-| Findings | ✗ | ✗ | ✓ | ✓ |
-| Evidence data | ✗ | ✗ | ✓ | ✓ |
-| Collection method | ✗ | ✗ | ✓ | ✓ |
-| Collection target | ✗ | ✗ | ✓ | ✓ |
-| Collection command | ✗ | ✗ | ✗ | ✓ |
-| Collection inputs | ✗ | ✗ | ✗ | ✓ |
-| Reproducibility info | ✗ | ✗ | ✗ | ✓ |
-| Package metadata | ✗ | ✗ | ✗ | ✓ |
+Consumers derive narrower views by dropping fields before
+transmission. The replay hash is computed over
+`(intent, contract, outcome)` only, so it is **stable under every
+documented filter** — a filtered extract carries the same
+`replay_hash` as the unfiltered envelope.
+
+| Filter recipe | Drop from envelope | Resulting view |
+|---|---|---|
+| Attestation-equivalent | `observations[]`, `policies[].findings`, `policies[].observation_refs`, `reproducibility` | Identity, outcome, control mappings, replay hash, signature |
+| Summary-equivalent | `observations[].body`, `policies[].findings` | Identity, outcome, observation metadata + content hashes, replay hash, signature |
+| Full | (nothing) | The envelope as emitted |
 
 ### 10.3 Use Cases
 
-| Output Format | Primary Use Case | Consumer |
-|---------------|------------------|----------|
-| Summary | CI/CD pipelines | Build systems |
-| Summary | Quick status checks | Developers |
-| Attestation | Compliance posture dashboards | SaaS platform |
-| Attestation | SIEM/SOAR alerting | Security tools |
-| Attestation | Audit proof | Compliance teams |
-| Full Results | Remediation workflows | Operations teams |
-| Full Results | Incident investigation | Security teams |
-| Full Results | Break-glass access | SaaS (time-limited) |
-| Assessor Package | Audit verification | External auditors |
-| Assessor Package | Evidence reproduction | Assessment teams |
+| Filter recipe | Primary Use Case | Consumer |
+|---|---|---|
+| Attestation-equivalent | Compliance posture dashboards | SaaS platform |
+| Attestation-equivalent | SIEM/SOAR alerting | Security tools |
+| Attestation-equivalent | Audit proof | Compliance teams |
+| Summary-equivalent | CI/CD pass/fail signals | Build systems |
+| Full | Remediation workflows | Operations teams |
+| Full | Incident investigation | Security teams |
+| Full | Audit verification | External auditors |
+| Full | Evidence reproduction | Assessment teams |
 
-### 10.4 Network Safety
+### 10.4 Signing After Filtering
 
-| Format | Contains CUI | Network Safe |
-|--------|--------------|--------------|
-| Summary | No | Yes |
-| Attestation | No | Yes |
-| Full Results | Yes | No |
-| Assessor Package | Yes | No |
+The `envelope.signature` block covers the unfiltered envelope.
+Consumers that strip fields before transmission have two options:
+
+1. **Forward the original signature** alongside the filtered extract;
+   downstream verifiers rehydrate from a local archive (or refuse to
+   verify without it) and confirm signature over the full shape.
+2. **Counter-sign the filtered extract** with the consumer's own
+   key; the chain becomes `agent_signature(full) →
+   consumer_signature(extract)` and downstream verifiers trust the
+   consumer's key, not the agent's.
+
+The trust model takes no position on which is correct — see
+[ESP Trust Model §7.4](10_ESP_Trust_Model_v1_2_0.md) for the full
+discussion.
 
 ---
 

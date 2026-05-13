@@ -638,6 +638,7 @@ fn parse_inline_criterion_node(parser: &mut dyn Parser) -> Result<CriterionNode,
 
     let mut state_refs = Vec::new();
     let mut object_refs = Vec::new();
+    let mut set_refs: Vec<SetRef> = Vec::new();
     let mut local_states = Vec::new();
     let mut local_object = None;
 
@@ -660,6 +661,14 @@ fn parse_inline_criterion_node(parser: &mut dyn Parser) -> Result<CriterionNode,
                 let object_id = parser.expect_identifier()?;
                 object_refs.push(ObjectRef {
                     object_id,
+                    span: Some(parser.current_span()),
+                });
+            }
+            Some(Token::Keyword(Keyword::SetRef)) => {
+                parser.advance();
+                let set_id = parser.expect_identifier()?;
+                set_refs.push(SetRef {
+                    set_id,
                     span: Some(parser.current_span()),
                 });
             }
@@ -691,6 +700,7 @@ fn parse_inline_criterion_node(parser: &mut dyn Parser) -> Result<CriterionNode,
         test,
         state_refs,
         object_refs,
+        set_refs,
         local_states,
         local_object,
         span: Some(parser.current_span()),

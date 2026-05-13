@@ -8,9 +8,9 @@
 //! This module implements the `ComplianceFinding` structure from the
 //! ESP v1.0.0 Canonical Execution Schema (Section 9).
 //!
-//! As of v2.0.0 findings are always included in the `AssessorPackage`
-//! envelope. Consumers that need an attestation-style (CUI-free) view
-//! should drop the `findings` array in their own post-processing.
+//! Since v2.0.0 findings are always included in the `AssessorPackage`
+//! envelope. Consumers building attestation-equivalent output should drop
+//! the `findings` array in their own post-processing.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -97,9 +97,8 @@ impl From<super::common::Criticality> for FindingSeverity {
 
 /// A compliance finding from policy execution
 ///
-/// Contains details about a validation failure, including expected vs actual
-/// values. This is CUI (Controlled Unclassified Information) and should only
-/// be included in full results, not attestations.
+/// Contains details about a validation failure, including expected vs
+/// actual values for non-passing criteria.
 ///
 /// ## Schema Reference
 ///

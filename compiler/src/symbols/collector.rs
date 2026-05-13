@@ -522,6 +522,10 @@ impl SymbolCollector {
             self.visit_object_ref(object_ref)?;
         }
 
+        for set_ref in &ctn.set_refs {
+            self.visit_set_ref(set_ref)?;
+        }
+
         // Visit local symbols (CTN-scoped)
         let local_scope = SymbolScope::Local(ctn.criterion_type.clone());
 

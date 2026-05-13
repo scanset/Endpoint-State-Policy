@@ -19,9 +19,8 @@
 //!
 //!         ↓ ResultBuilder (in common/results) transforms to ↓
 //!
-//!         ├── Attestation (CUI-free, uses manifest.replay_hash)
-//!         ├── FullResults (with Evidence, uses manifest.replay_hash)
-//!         └── AssessorResults (with Evidence + command/inputs, uses manifest.replay_hash)
+//!         └── AssessorPackage (uses manifest.replay_hash; carries
+//!             observations + findings + reproducibility info)
 //! ```
 //!
 //! ## Replay Hash
@@ -577,10 +576,12 @@ impl ExecutionEngine {
     /// Block nodes encode the logical operator and negation.
     fn build_replay_tree_structure(&self, tree_result: &TreeResult) -> ReplayTreeNode {
         // Leaf: single CTN result, no children
-        if tree_result.ctn_results.len() == 1 && tree_result.child_results.is_empty() {
-            return ReplayTreeNode::Leaf {
-                ctn_node_id: tree_result.ctn_results[0].ctn_node_id.to_string(),
-            };
+        if tree_result.child_results.is_empty() {
+            if let [single] = tree_result.ctn_results.as_slice() {
+                return ReplayTreeNode::Leaf {
+                    ctn_node_id: single.ctn_node_id.to_string(),
+                };
+            }
         }
 
         // Collect all children (both leaf CTN results and nested blocks)
@@ -705,7 +706,21 @@ impl ExecutionEngine {
     ) -> Result<CtnExecutionResult, ExecutionError> {
         use std::time::Instant;
 
-        const CTN_TIMEOUT_SECS: u64 = 30;
+        // Ceiling on the wall-clock time a single CTN can spend in setup +
+        // collection. Has to be high enough for agentless / cloud-control-
+        // plane channels (`az vm run-command invoke`, `aws ssm send-command`,
+        // bastion tunnel setup) where each per-OBJECT round-trip is 15–30s
+        // dominated by ARM/AWS API overhead. A CTN with N OBJECTs accumulates
+        // N round-trips, so a baseline policy with ~20 file_metadata
+        // OBJECTs against an Azure VM can legitimately need 5+ minutes.
+        // Agent-mode scans finish in subseconds and never touch this
+        // ceiling; raising it doesn't slow them down. Override via env var
+        // for operators tuning either direction.
+        const CTN_TIMEOUT_DEFAULT_SECS: u64 = 600;
+        let ctn_timeout_secs: u64 = std::env::var("ESP_CTN_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(CTN_TIMEOUT_DEFAULT_SECS);
         let start = Instant::now();
 
         log_debug!("Starting CTN execution",
@@ -734,12 +749,12 @@ impl ExecutionEngine {
             })?;
 
         // Check timeout after setup
-        if start.elapsed().as_secs() > CTN_TIMEOUT_SECS {
+        if start.elapsed().as_secs() > ctn_timeout_secs {
             return Err(ExecutionError::ExecutorFailed {
                 ctn_type: criterion.criterion_type.clone(),
                 reason: format!(
                     "CTN execution exceeded timeout of {}s during setup",
-                    CTN_TIMEOUT_SECS
+                    ctn_timeout_secs
                 ),
             });
         }
@@ -805,12 +820,12 @@ impl ExecutionEngine {
         );
 
         // Check timeout after collection and filtering
-        if start.elapsed().as_secs() > CTN_TIMEOUT_SECS {
+        if start.elapsed().as_secs() > ctn_timeout_secs {
             return Err(ExecutionError::ExecutorFailed {
                 ctn_type: criterion.criterion_type.clone(),
                 reason: format!(
                     "CTN execution exceeded timeout of {}s during collection",
-                    CTN_TIMEOUT_SECS
+                    ctn_timeout_secs
                 ),
             });
         }
@@ -1362,6 +1377,13 @@ pub struct PolicyExecutionResult {
     /// Replaces the previous `content_hash` + `evidence_hash`.
     /// Stable across runs when compliance posture is unchanged.
     pub replay_hash: String,
+    /// Per-CTN-per-OBJECT v2 hash list. One entry per (ctn_node_id,
+    /// object_id) pair the engine evaluated. Used by ingest-side
+    /// callers to populate `evidence.ctn_results` and surface drift at
+    /// the granularity of "which check on which asset flipped". Empty
+    /// for envelopes built from policies that don't have any OBJECTs
+    /// resolved at execution (rare).
+    pub ctn_object_hashes: Vec<crate::types::CtnObjectHash>,
     /// Policy metadata (optional + extended fields)
     ///
     /// Contains version, title, description, author, tags, and any
@@ -1415,6 +1437,11 @@ impl From<ExecutionManifest> for PolicyExecutionResult {
         // Convert PolicyMetadataFields to PolicyMetadata
         let metadata = manifest.metadata.to_builder_metadata();
 
+        // v2 per-CTN-per-OBJECT hash list, computed alongside the v1
+        // bundled rollup. Cost is one extra walk over the criteria; the
+        // SHA-256 work is identical whether v1 or v2 paths are queried.
+        let ctn_object_hashes = manifest.replay_manifest.all_ctn_object_hashes();
+
         Self {
             outcome,
             criteria_counts: manifest.criteria_counts,
@@ -1423,6 +1450,7 @@ impl From<ExecutionManifest> for PolicyExecutionResult {
             tree_passed: manifest.tree_passed,
             // CRITICAL: Carry through the replay hash!
             replay_hash: manifest.replay_hash,
+            ctn_object_hashes,
             // CRITICAL: Carry through the metadata!
             metadata,
         }

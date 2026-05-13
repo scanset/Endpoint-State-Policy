@@ -7,7 +7,7 @@
 //! ## Schema Reference
 //!
 //! Implements Sections 3.2-3.6 and 4 of ESP v2.0.0 Canonical Execution Schema
-//! (`docs/09_ESP_Canonical_Schema_v2_0_0.md`).
+//! (`docs/09_ESP_Canonical_Schema_v2_1_1.md`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -20,8 +20,19 @@ use super::transparency::TransparencyProof;
 // Constants
 // ============================================================================
 
-/// Current schema version (v2.0.0 per `09_ESP_Canonical_Schema_v2_0_0.md`).
-pub const SCHEMA_VERSION: &str = "2.0.0";
+/// Current wire schema version. v2.0.0 was the polymorphic-host baseline;
+/// v2.1.0 additively introduced the `replay_hash_version` field on
+/// `ResultEnvelope` (back-compat via `#[serde(default)]`); v2.1.1 removes
+/// the data-classification fields from `PackageInfo` (classification is
+/// now the consumer's responsibility, not the envelope's).
+pub const SCHEMA_VERSION: &str = "2.1.1";
+
+/// Default for `ResultEnvelope.replay_hash_version` when missing from a
+/// deserialized envelope (i.e., the envelope predates schema v2.1.0).
+/// New envelopes produced under v2.1.0+ should set this explicitly.
+pub fn default_replay_hash_version() -> u8 {
+    1
+}
 
 // ============================================================================
 // ResultEnvelope
@@ -66,8 +77,24 @@ pub struct ResultEnvelope {
     /// across runs when compliance posture is unchanged. Present in all
     /// output modes. Allows verification that attestation matches full results.
     ///
-    /// Replaces the previous `content_hash` + `evidence_hash`.
+    /// Replaces the previous `content_hash` + `evidence_hash`. The
+    /// rollup scheme that produced this hash is encoded in
+    /// `replay_hash_version`; cross-version comparisons are meaningless
+    /// (a v1 and v2 hash for the same posture will differ even when
+    /// nothing changed).
     pub replay_hash: String,
+
+    /// Replay-hash schema version. `1` = legacy bundled-objects rollup
+    /// (every envelope produced before engine v2.2.0); `2` =
+    /// per-CTN-per-OBJECT primitive with explicit
+    /// envelope→policy→ctn_object hierarchy.
+    ///
+    /// `#[serde(default)]` returns `1` for envelopes deserialized from
+    /// pre-2.1.0 schema-version streams, so the existing transparency-
+    /// log corpus remains parseable. New envelopes produced under
+    /// schema v2.1.0 always serialize this field explicitly.
+    #[serde(default = "default_replay_hash_version")]
+    pub replay_hash_version: u8,
 
     /// Cryptographic signature (present when PKI identity available)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,7 +117,7 @@ pub struct ResultEnvelope {
     /// In `attestation` output mode, observation bodies are stripped; the
     /// `content_hash` is preserved so the reference chain stays intact.
     ///
-    /// See Section 4 of `09_ESP_Canonical_Schema_v2_0_0.md`.
+    /// See Section 4 of `09_ESP_Canonical_Schema_v2_1_1.md`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub observations: Vec<Observation>,
 }
@@ -110,6 +137,7 @@ impl ResultEnvelope {
             started_at: now.clone(),
             completed_at: now,
             replay_hash: String::new(),
+            replay_hash_version: default_replay_hash_version(),
             signature: None,
             identity_status: IdentityStatus::default(),
             observations: Vec::new(),
@@ -131,6 +159,7 @@ impl ResultEnvelope {
             started_at: now.clone(),
             completed_at: now,
             replay_hash: String::new(),
+            replay_hash_version: default_replay_hash_version(),
             signature: None,
             identity_status,
             observations: Vec::new(),
@@ -139,10 +168,7 @@ impl ResultEnvelope {
 
     /// Record an observation into this envelope and return a reference to it
     /// suitable for `PolicyResult.observation_refs`.
-    pub fn record_observation(
-        &mut self,
-        obs: Observation,
-    ) -> super::observation::ObservationRef {
+    pub fn record_observation(&mut self, obs: Observation) -> super::observation::ObservationRef {
         let r = obs.as_ref();
         self.observations.push(obs);
         r
@@ -176,6 +202,17 @@ impl ResultEnvelope {
     /// Set the replay hash
     pub fn with_replay_hash(mut self, hash: impl Into<String>) -> Self {
         self.replay_hash = hash.into();
+        self
+    }
+
+    /// Set the replay-hash schema version. `1` (default) for the legacy
+    /// bundled-objects rollup; `2` for the per-CTN-per-OBJECT primitive
+    /// (engine v2.2.0+). Callers must set this whenever they call
+    /// `with_replay_hash` with a v2 hash so consumers can route
+    /// comparisons correctly — passing a v2 hash with version=1 (the
+    /// default) is a silent corruption.
+    pub fn with_replay_hash_version(mut self, version: u8) -> Self {
+        self.replay_hash_version = version;
         self
     }
 
@@ -513,7 +550,7 @@ impl Default for AgentInfo {
 /// host-type-specific structured data and is where provider-specific
 /// identifiers (subscription_id, account_id, tenant_id, etc.) live.
 ///
-/// See Section 3.4 of `docs/09_ESP_Canonical_Schema_v2_0_0.md`.
+/// See Section 3.4 of `docs/09_ESP_Canonical_Schema_v2_1_1.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostInfo {
     /// Dotted `<provider>.<kind>` discriminator. Free-form; see the
@@ -554,10 +591,7 @@ impl HostInfo {
     ///
     /// This is the canonical v2.0.0 constructor. Use `::vm_like()` or
     /// `::new()` for VM-shape convenience.
-    pub fn for_host_type(
-        host_type: impl Into<String>,
-        host_id: impl Into<String>,
-    ) -> Self {
+    pub fn for_host_type(host_type: impl Into<String>, host_id: impl Into<String>) -> Self {
         Self {
             host_type: host_type.into(),
             host_id: host_id.into(),
@@ -640,11 +674,7 @@ impl HostInfo {
     }
 
     /// Add a single attribute.
-    pub fn with_attr(
-        mut self,
-        key: impl Into<String>,
-        value: serde_json::Value,
-    ) -> Self {
+    pub fn with_attr(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
         self.attrs.insert(key.into(), value);
         self
     }
@@ -730,7 +760,7 @@ mod tests {
         let envelope = ResultEnvelope::new(agent, host);
 
         assert!(envelope.result_id.starts_with("esp-result-"));
-        assert_eq!(envelope.schema_version, "2.0.0");
+        assert_eq!(envelope.schema_version, "2.1.1");
         assert!(!envelope.is_signed());
         assert!(!envelope.is_identity_bootstrapped());
     }
@@ -778,8 +808,8 @@ mod tests {
 
         assert!(!host.host_id.is_empty());
         assert!(!host.host_type.is_empty());
-        assert!(host.os.as_deref().map_or(false, |s| !s.is_empty()));
-        assert!(host.arch.as_deref().map_or(false, |s| !s.is_empty()));
+        assert!(host.os.as_deref().is_some_and(|s| !s.is_empty()));
+        assert!(host.arch.as_deref().is_some_and(|s| !s.is_empty()));
     }
 
     #[test]
@@ -891,7 +921,7 @@ mod tests {
 
         let json = serde_json::to_string_pretty(&envelope).unwrap();
 
-        assert!(json.contains("\"schema_version\": \"2.0.0\""));
+        assert!(json.contains("\"schema_version\": \"2.1.1\""));
         assert!(json.contains("\"identity_status\":"));
         assert!(json.contains("\"bootstrapped\": true"));
         assert!(json.contains("\"signer_id\": \"scanset://test\""));
@@ -901,7 +931,7 @@ mod tests {
         assert!(!json.contains("\"signature\":"));
 
         let parsed: ResultEnvelope = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.schema_version, "2.0.0");
+        assert_eq!(parsed.schema_version, "2.1.1");
         assert!(parsed.identity_status.is_bootstrapped());
         assert_eq!(parsed.replay_hash, "sha256:replay123");
     }
@@ -959,7 +989,7 @@ mod tests {
 
     #[test]
     fn test_schema_version_constant() {
-        assert_eq!(SCHEMA_VERSION, "2.0.0");
+        assert_eq!(SCHEMA_VERSION, "2.1.1");
     }
 
     #[test]
@@ -985,11 +1015,10 @@ mod tests {
         assert!(az.hostname.is_none());
 
         // Non-VM host type: tenant.
-        let tenant = HostInfo::for_host_type("m365.tenant", "00000000-tenant-guid")
-            .with_attr(
-                "domain",
-                serde_json::Value::String("contoso.onmicrosoft.com".into()),
-            );
+        let tenant = HostInfo::for_host_type("m365.tenant", "00000000-tenant-guid").with_attr(
+            "domain",
+            serde_json::Value::String("contoso.onmicrosoft.com".into()),
+        );
         assert_eq!(tenant.host_type, "m365.tenant");
         assert!(tenant.os.is_none());
         assert!(tenant.arch.is_none());

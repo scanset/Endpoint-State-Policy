@@ -20,8 +20,13 @@
 > `Value`. It is purely a wire-shape concern for producers and
 > consumers of `ResultEnvelope`.
 >
-> See `docs/09_ESP_Canonical_Schema_v2_0_0.md` §3.4 (HostInfo) and §4
+> See `docs/09_ESP_Canonical_Schema_v2_1_1.md` §3.4 (HostInfo) and §4
 > (Observation) for the envelope-level type rules.
+>
+> **v2.1.0 / v2.2.0 / v2.2.1** add no further DSL-language type
+> changes. v2.1.0 adds one wire-shape field (`replay_hash_version: u8`
+> on `ResultEnvelope`) but no policy-language consumer can construct
+> or inspect it.
 
 ---
 

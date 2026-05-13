@@ -561,10 +561,10 @@ impl CtnExecutionResult {
             .collect()
     }
 
-    /// Get collection metadata summary for attestations
+    /// Get collection metadata summary
     ///
     /// Returns metadata about collection without the actual field values,
-    /// suitable for CUI-free attestations
+    /// suitable for summary-style outputs.
     pub fn collection_metadata_summary(&self) -> Vec<CollectionMetadataSummary> {
         self.collected_data
             .values()
@@ -586,7 +586,7 @@ impl CtnExecutionResult {
     }
 }
 
-/// Summary of collection metadata for attestations (CUI-free)
+/// Summary of collection metadata (no field values)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CollectionMetadataSummary {
     pub object_id: String,

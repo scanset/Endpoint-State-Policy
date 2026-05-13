@@ -312,14 +312,9 @@ fn execute_count(
     // 3. Count based on type
     let count = match &source_value.value {
         ResolvedValue::Collection(items) => items.len() as i64,
-        ResolvedValue::String(s) => {
-            // Empty string counts as 0, non-empty as 1
-            if s.is_empty() {
-                0
-            } else {
-                1
-            }
-        }
+        // Empty string counts as 0, non-empty as 1
+        ResolvedValue::String(s) if s.is_empty() => 0,
+        ResolvedValue::String(_) => 1,
         // Any other single value counts as 1
         _ => 1,
     };

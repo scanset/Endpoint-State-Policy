@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+
 //! ESP v2.0.0 canonical wire-shape vectors.
 //!
 //! Loads the hand-written golden JSON files in `tests/vectors_v2/`,
@@ -24,8 +31,8 @@ fn vector_path(name: &str) -> PathBuf {
 
 fn load_vector(name: &str) -> serde_json::Value {
     let path = vector_path(name);
-    let bytes = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("read vector {}: {}", path.display(), e));
+    let bytes =
+        std::fs::read(&path).unwrap_or_else(|e| panic!("read vector {}: {}", path.display(), e));
     serde_json::from_slice(&bytes)
         .unwrap_or_else(|e| panic!("parse vector {}: {}", path.display(), e))
 }
@@ -39,11 +46,17 @@ where
 {
     let original = load_vector(name);
 
-    let typed: T = serde_json::from_value(original.clone())
-        .unwrap_or_else(|e| panic!("deserialize {} as {}: {}", name, std::any::type_name::<T>(), e));
+    let typed: T = serde_json::from_value(original.clone()).unwrap_or_else(|e| {
+        panic!(
+            "deserialize {} as {}: {}",
+            name,
+            std::any::type_name::<T>(),
+            e
+        )
+    });
 
-    let reemitted = serde_json::to_value(&typed)
-        .unwrap_or_else(|e| panic!("reserialize {}: {}", name, e));
+    let reemitted =
+        serde_json::to_value(&typed).unwrap_or_else(|e| panic!("reserialize {}: {}", name, e));
 
     assert_eq!(
         original,
@@ -151,7 +164,10 @@ fn observation_exec_omits_body() {
         "observation_exec vector must omit `body` entirely (got {:?})",
         v.get("body")
     );
-    assert!(v["content_hash"].as_str().unwrap_or("").starts_with("sha256:"));
+    assert!(v["content_hash"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("sha256:"));
 }
 
 // ---------------------------------------------------------------------------

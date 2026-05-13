@@ -8,7 +8,7 @@
 
 > **This document describes the v1.2.0 envelope.** New envelopes emitted
 > by the agent are v2.0.0 and follow the schema in
-> `docs/09_ESP_Canonical_Schema_v2_0_0.md`. This document remains
+> `docs/09_ESP_Canonical_Schema_v2_1_1.md`. This document remains
 > normative for archived v1.x envelopes and for consumers that must
 > continue reading them; it is NOT updated further.
 >

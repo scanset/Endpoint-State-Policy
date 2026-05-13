@@ -3,7 +3,7 @@ resolver = "2"
 members = ["common", "compiler", "execution_engine"]
 
 [workspace.package]
-version = "2.0.0"
+version = "2.2.2"
 edition = "2021"
 authors = ["Curtis Slone <curtis@scanset.io>"]
 license = "MIT OR Apache-2.0"
@@ -22,7 +22,6 @@ chrono = { version = "0.4", features = ["serde"] }
 common = { path = "common" }
 compiler = { path = "compiler" }
 execution_engine = { path = "execution_engine" }
-contract_kit = { path = "contract_kit" }
 
 [profile.dev]
 opt-level = 0

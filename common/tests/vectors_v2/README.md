@@ -2,7 +2,11 @@
 
 These JSON files are the authoritative examples of the v2.0.0 wire shape
 for the entities defined in
-`docs/09_ESP_Canonical_Schema_v2_0_0.md`:
+`docs/09_ESP_Canonical_Schema_v2_1_1.md` (which the v2.1.0 schema bump
+additively extends — see that document's §0). v2.0.0 envelopes
+deserialize cleanly under v2.1.0 readers because the new
+`replay_hash_version` field carries a `#[serde(default = 1)]`, so these
+vectors continue to validate without modification:
 
 | File                          | Pins                                                               |
 |-------------------------------|--------------------------------------------------------------------|

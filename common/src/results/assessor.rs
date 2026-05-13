@@ -87,8 +87,6 @@ pub struct PackageInfo {
     pub format_version: String,
     pub generated_at: String,
     pub purpose: String,
-    pub contains_cui: bool,
-    pub distribution: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
 }
@@ -99,8 +97,6 @@ impl Default for PackageInfo {
             format_version: "1.2.0".to_string(),
             generated_at: current_timestamp(),
             purpose: "Compliance assessment verification".to_string(),
-            contains_cui: true,
-            distribution: "Internal use only - contains CUI".to_string(),
             notes: None,
         }
     }
@@ -273,6 +269,11 @@ pub struct AssessorPackageBuilder {
     host: HostInfo,
     policies: Vec<AssessorPolicyResult>,
     replay_hash: Option<String>,
+    /// Replay-hash schema version for the hash above. Defaults to `1`
+    /// (legacy bundled-objects rollup) so callers that haven't migrated
+    /// keep producing exactly the same envelopes as before. Callers
+    /// that supply a v2 hash must call `with_replay_hash_version(2)`.
+    replay_hash_version: u8,
     identity_status: Option<IdentityStatus>,
     notes: Option<String>,
     observations: Vec<Observation>,
@@ -285,6 +286,7 @@ impl AssessorPackageBuilder {
             host,
             policies: Vec::new(),
             replay_hash: None,
+            replay_hash_version: 1,
             identity_status: None,
             notes: None,
             observations: Vec::new(),
@@ -312,6 +314,14 @@ impl AssessorPackageBuilder {
         self
     }
 
+    /// Set the replay-hash schema version (`1` legacy, `2` per-CTN-per-OBJECT).
+    /// Callers passing a v2 hash MUST call this with `2`; the default is `1`
+    /// so legacy callers don't need a code change to keep producing v1 envelopes.
+    pub fn with_replay_hash_version(mut self, version: u8) -> Self {
+        self.replay_hash_version = version;
+        self
+    }
+
     /// Set the identity status
     pub fn with_identity_status(mut self, identity_status: IdentityStatus) -> Self {
         self.identity_status = Some(identity_status);
@@ -328,13 +338,16 @@ impl AssessorPackageBuilder {
     /// ## Errors
     ///
     /// Returns an error if:
-    /// - No policies were added
+    /// - Both `policies` and `observations` are empty (the envelope would be
+    ///   semantically empty — neither a policy attestation nor an observational
+    ///   record). Discovery / inline-CTN envelopes legitimately have empty
+    ///   `policies` but populated `observations`; that case is allowed.
     /// - `replay_hash` is not set
     /// - `identity_status` is not set
     pub fn build(self) -> Result<AssessorPackage, ResultError> {
-        if self.policies.is_empty() {
+        if self.policies.is_empty() && self.observations.is_empty() {
             return Err(ResultError::BuildError(
-                "At least one policy result is required".to_string(),
+                "At least one policy result or observation is required".to_string(),
             ));
         }
 
@@ -356,6 +369,7 @@ impl AssessorPackageBuilder {
 
         let envelope = ResultEnvelope::with_identity(self.agent, self.host, identity_status)
             .with_replay_hash(replay_hash)
+            .with_replay_hash_version(self.replay_hash_version)
             .with_observations(self.observations);
 
         let mut package_info = PackageInfo::default();
@@ -508,7 +522,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("At least one policy result is required"));
+            .contains("At least one policy result or observation is required"));
     }
 
     #[test]
@@ -577,7 +591,6 @@ mod tests {
     #[test]
     fn test_package_info_default() {
         let info = PackageInfo::default();
-        assert!(info.contains_cui);
         assert_eq!(info.format_version, "1.2.0");
     }
 

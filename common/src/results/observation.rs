@@ -1,4 +1,5 @@
-//! Observation types for ESP scan results (schema v2.0.0)
+//! Observation types for ESP scan results (introduced in schema v2.0.0;
+//! unchanged through current schema v2.1.0)
 //!
 //! An **observation** is one act of data collection against a host -
 //! a file read, a command run, an API call, an SDK query. It is the
@@ -20,7 +21,7 @@
 //! ## Schema Reference
 //!
 //! Implements Section 4 of ESP v2.0.0 Canonical Execution Schema
-//! (`docs/09_ESP_Canonical_Schema_v2_0_0.md`).
+//! (`docs/09_ESP_Canonical_Schema_v2_1_1.md`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -141,9 +142,7 @@ pub struct ObservationRef {
 
 impl ObservationRef {
     pub fn new(uuid: impl Into<String>) -> Self {
-        Self {
-            uuid: uuid.into(),
-        }
+        Self { uuid: uuid.into() }
     }
 }
 
@@ -219,8 +218,7 @@ impl ObservationMethod {
 
     /// Convenience: sdk_call observation method.
     pub fn sdk_call(operation: impl Into<String>) -> Self {
-        Self::new("sdk_call")
-            .with_param("operation", serde_json::Value::String(operation.into()))
+        Self::new("sdk_call").with_param("operation", serde_json::Value::String(operation.into()))
     }
 }
 
@@ -229,7 +227,9 @@ impl ObservationMethod {
 // ============================================================================
 
 fn current_timestamp() -> String {
-    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+    chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string()
 }
 
 /// Generate a UUID v4 string without pulling the `uuid` crate if it isn't
@@ -355,11 +355,7 @@ mod tests {
     #[test]
     fn observation_uuid_has_v4_bits() {
         let host = HostRef::new("linux.vm", "host-abc");
-        let obs = Observation::new(
-            host,
-            ObservationMethod::file_read("/x"),
-            "sha256:0",
-        );
+        let obs = Observation::new(host, ObservationMethod::file_read("/x"), "sha256:0");
         // version 4 nibble at index 14 (after 3 dashes, 0-indexed char 14)
         let bytes: Vec<char> = obs.uuid.chars().collect();
         assert_eq!(bytes[14], '4', "uuid {} missing v4 nibble", obs.uuid);

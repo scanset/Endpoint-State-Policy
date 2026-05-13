@@ -22,8 +22,20 @@
 > This is a wire-shape refactor, not a semantic change: the set of
 > facts that determined the outcome is identical; only their
 > representation in the envelope differs. See
-> `docs/09_ESP_Canonical_Schema_v2_0_0.md` §5 and §7 for the
+> `docs/09_ESP_Canonical_Schema_v2_1_1.md` §5 and §7 for the
 > `PolicyResult` / `Observation` binding rules.
+>
+> **v2.1.0** extends the *resolution* phase only: `SET_REF` is now an
+> accepted CTN content operand (the resolution step expands it to the
+> underlying `OBJECT_REF` list before evaluation). Evaluation
+> semantics — outcome rules, TEST specification, CRI short-circuiting
+> — are unchanged.
+>
+> **v2.2.0** introduces an opt-in v2 replay-hash scheme that hashes
+> `(intent, contract, outcome)` per **(criterion, OBJECT)** pair
+> rather than per criterion. This is a hashing change, not an
+> evaluation-semantics change — the same set of facts is hashed at a
+> finer granularity. See Trust Model §0 for trust implications.
 
 ---
 

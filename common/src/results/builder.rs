@@ -198,16 +198,38 @@ impl ResultBuilder {
     /// * `policies` - The policy results with full evidence and collection details
     /// * `replay_hash` - Pre-computed replay hash from `ExecutionManifest`
     /// * `identity_status` - PKI bootstrap status
+    ///
+    /// The replay hash is interpreted under v1 semantics (legacy
+    /// bundled-objects rollup). Callers that have computed a v2
+    /// per-CTN-per-OBJECT hash should use `build_assessor_package_with_version`
+    /// to thread the schema version through; v1 callers don't need to
+    /// change anything.
     pub fn build_assessor_package(
         self,
         policies: Vec<AssessorInput>,
         replay_hash: String,
         identity_status: IdentityStatus,
     ) -> Result<AssessorPackage, ResultError> {
+        self.build_assessor_package_with_version(policies, replay_hash, 1, identity_status)
+    }
+
+    /// Build an assessor package with an explicit replay-hash schema version.
+    ///
+    /// Same as `build_assessor_package` but threads `replay_hash_version`
+    /// through to the envelope. Use this when calling with a v2
+    /// per-CTN-per-OBJECT hash (engine v2.2.0+).
+    pub fn build_assessor_package_with_version(
+        self,
+        policies: Vec<AssessorInput>,
+        replay_hash: String,
+        replay_hash_version: u8,
+        identity_status: IdentityStatus,
+    ) -> Result<AssessorPackage, ResultError> {
         let host_ref = self.host.as_ref();
 
         let mut builder = AssessorPackageBuilder::new(self.agent, self.host)
             .with_replay_hash(replay_hash)
+            .with_replay_hash_version(replay_hash_version)
             .with_identity_status(identity_status);
 
         // Global dedup across all policies: (method_kind, target, content_hash) -> uuid.
@@ -299,8 +321,10 @@ fn map_collection_to_observation_method(
     object_id: &str,
 ) -> ObservationMethod {
     let Some(m) = method else {
-        return ObservationMethod::new("collected")
-            .with_param("object_id", serde_json::Value::String(object_id.to_string()));
+        return ObservationMethod::new("collected").with_param(
+            "object_id",
+            serde_json::Value::String(object_id.to_string()),
+        );
     };
 
     let target_value = m.target.clone().unwrap_or_else(|| object_id.to_string());
@@ -329,8 +353,10 @@ fn map_collection_to_observation_method(
             .with_param("target", serde_json::Value::String(target_value.clone())),
         CollectionMethodType::SocketInspection => ObservationMethod::new("socket_inspection")
             .with_param("target", serde_json::Value::String(target_value.clone())),
-        CollectionMethodType::Computed => ObservationMethod::new("computed")
-            .with_param("object_id", serde_json::Value::String(object_id.to_string())),
+        CollectionMethodType::Computed => ObservationMethod::new("computed").with_param(
+            "object_id",
+            serde_json::Value::String(object_id.to_string()),
+        ),
         CollectionMethodType::Custom(s) => ObservationMethod::new(s.clone())
             .with_param("target", serde_json::Value::String(target_value.clone())),
     };
@@ -343,7 +369,6 @@ fn map_collection_to_observation_method(
 
     obs_method
 }
-
 
 // ============================================================================
 // Input Type

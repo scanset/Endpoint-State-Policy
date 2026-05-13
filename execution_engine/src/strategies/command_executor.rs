@@ -141,11 +141,7 @@ impl SystemCommandExecutor {
     ///
     /// Example:
     ///   executor.set_env_from("PGPASSWORD", "ESP_PG_PASS");
-    pub fn set_env_from(
-        &mut self,
-        child_var: impl Into<String>,
-        source_var: impl Into<String>,
-    ) {
+    pub fn set_env_from(&mut self, child_var: impl Into<String>, source_var: impl Into<String>) {
         self.dynamic_env.insert(child_var.into(), source_var.into());
     }
 
@@ -177,7 +173,10 @@ impl SystemCommandExecutor {
         // PATH from env — their target shell supplies its own.
         match (out.get("PATH").cloned(), dynamic.remove("PATH")) {
             (Some(static_path), Some(dynamic_path)) => {
-                out.insert("PATH".to_string(), format!("{}:{}", dynamic_path, static_path));
+                out.insert(
+                    "PATH".to_string(),
+                    format!("{}:{}", dynamic_path, static_path),
+                );
             }
             (None, Some(dynamic_path)) => {
                 out.insert("PATH".to_string(), dynamic_path);

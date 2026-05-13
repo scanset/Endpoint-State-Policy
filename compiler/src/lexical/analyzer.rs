@@ -115,11 +115,12 @@ impl LexicalMetrics {
                     *self.operator_usage_patterns.entry(op_name).or_insert(0) += 1;
                 }
             }
-            Token::Space | Token::Tab | Token::Newline => {
-                if preferences.include_all_tokens_in_counts {
-                    self.whitespace_tokens += 1;
-                }
+            Token::Space | Token::Tab | Token::Newline
+                if preferences.include_all_tokens_in_counts =>
+            {
+                self.whitespace_tokens += 1;
             }
+            Token::Space | Token::Tab | Token::Newline => {}
             Token::Comment(_) => self.comment_count += 1,
             _ => {} // Literals, etc.
         }
@@ -411,23 +412,22 @@ impl LexicalAnalyzer {
                 }
 
                 // Multi-character operators
+                '!' if chars.peek().map(|(_, c)| *c) == Some('=') => {
+                    chars.next();
+                    let token = self.create_token(Token::NotEquals, current_pos, 2);
+                    self.metrics.record_token(&token.value, &self.preferences);
+                    tokens.push(token);
+                    current_pos = current_pos.advance_bytes(2);
+                    token_count += 1;
+                    Ok(())
+                }
                 '!' => {
-                    if chars.peek().map(|(_, c)| *c) == Some('=') {
-                        chars.next();
-                        let token = self.create_token(Token::NotEquals, current_pos, 2);
-                        self.metrics.record_token(&token.value, &self.preferences);
-                        tokens.push(token);
-                        current_pos = current_pos.advance_bytes(2);
-                        token_count += 1;
-                        Ok(())
-                    } else {
-                        self.metrics.record_invalid_char();
-                        Err(LexerError::InvalidCharacter {
-                            character: ch,
-                            line: current_pos.line,
-                            column: current_pos.column,
-                        })
-                    }
+                    self.metrics.record_invalid_char();
+                    Err(LexerError::InvalidCharacter {
+                        character: ch,
+                        line: current_pos.line,
+                        column: current_pos.column,
+                    })
                 }
                 '>' => {
                     if chars.peek().map(|(_, c)| *c) == Some('=') {

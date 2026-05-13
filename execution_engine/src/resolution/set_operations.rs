@@ -38,13 +38,37 @@ pub fn execute_set_operation(
     // Resolve all operands to concrete objects
     let mut resolved_operands = Vec::new();
     let mut operand_object_lists = Vec::new();
+    // Inline OBJECTs declared inside the SET need to be registered as
+    // globally addressable so that downstream OBJECT_REF lookup (after
+    // set_expansion converts a CTN-level SET_REF into OBJECT_REFs) can
+    // find them. Collect across operands first so we don't double-borrow
+    // context inside the loop, then bulk-insert below.
+    let mut inline_objects_to_register: Vec<ResolvedObject> = Vec::new();
 
     for (operand_index, operand) in set_operation.operands.iter().enumerate() {
         let (resolved_operand, objects) =
             resolve_set_operand(operand, &set_operation.set_id, operand_index, context)?;
 
+        // Inline OBJECTs (the only operand kind that produces fresh
+        // ResolvedObjects rather than referencing existing globals)
+        // need to be promoted to global lookup. Filter on the resolved
+        // operand variant so we only register inline ones.
+        if let ResolvedSetOperand::InlineObject { .. } = &resolved_operand {
+            inline_objects_to_register.extend(objects.iter().cloned());
+        }
+
         resolved_operands.push(resolved_operand);
         operand_object_lists.push(objects);
+    }
+
+    for inline in inline_objects_to_register {
+        // First-write wins: explicit global OBJECTs and prior SET inlines
+        // keep their resolution. New inline OBJECTs from this SET fill in
+        // any gaps.
+        context
+            .resolved_global_objects
+            .entry(inline.identifier.clone())
+            .or_insert(inline);
     }
 
     // Execute the specific SET operation to validate the logic

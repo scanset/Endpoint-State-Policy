@@ -1,5 +1,31 @@
-# NIST SP 800-218 Dependency Security Configuration
-# Implements: PS.3.1, PS.3.2
+# NIST SP 800-218 SSDF Dependency Security Configuration
+#
+# Implements the following SSDF tasks:
+#   PS.3.2 — Collect, safeguard, maintain, and share provenance data for
+#            software components used in development. Enforced here via
+#            license allow-list and source registry locking.
+#   PW.4.1 — Acquire and maintain well-secured software components from
+#            commercial, open-source, and other third-party developers
+#            for use in the producer's software. Enforced via RustSec
+#            advisory denial.
+#   PW.4.4 — Verify that acquired commercial, open-source, and other
+#            third-party software components comply with security
+#            requirements. Enforced via yanked-crate denial + license
+#            allow-list.
+#   PW.8.2 — Use automated mechanisms to detect existing vulnerabilities
+#            in components and to keep components up to date. Enforced
+#            via `make audit` (cargo-audit) and `cargo deny check
+#            advisories`.
+#   RV.1.1 — Gather vulnerability information from internal and external
+#            sources. Enforced via the RustSec advisory database
+#            referenced below.
+#
+# Companion artifacts:
+#   - docs/sbom/cyclonedx.json — CycloneDX SBOM of the workspace
+#     (PS.3.2 provenance for components and their transitive dependencies)
+#   - `cargo auditable build --release` embeds the dep tree in compiled
+#     binaries so deployed artifacts remain auditable post-distribution
+#     (PW.4.4 verification, RV.1.1 ongoing monitoring)
 
 [graph]
 targets = []
@@ -9,31 +35,47 @@ no-default-features = false
 [output]
 feature-depth = 1
 
+# -----------------------------------------------------------------------------
+# Advisories — RustSec vulnerability database checks (PW.4.1, PW.8.2, RV.1.1)
+# -----------------------------------------------------------------------------
+# As of cargo-deny 0.14 (advisories schema v2), all advisories are treated as
+# errors by default. Use `ignore` to record explicitly accepted risks; every
+# entry should be paired with a rationale in code review.
 [advisories]
+version = 2
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "deny"
-notice = "warn"
 ignore = [
-    # Add explicitly accepted advisories here
-    # Example: "RUSTSEC-2023-0001"
+    # Format: { id = "RUSTSEC-YYYY-NNNN", reason = "<accepted-risk rationale>" }
 ]
 
+# -----------------------------------------------------------------------------
+# Licenses — provenance + supply-chain license compliance (PS.3.2, PW.4.4)
+# -----------------------------------------------------------------------------
+# Allow-list only; any license not listed below is denied by default in
+# licenses schema v2. Confidence threshold guards against ambiguous license
+# detection.
 [licenses]
-unlicensed = "deny"
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-DFS-2016"]
-deny = [
-    "GPL-2.0",
-    "GPL-3.0",
-    "AGPL-1.0",
-    "AGPL-3.0",
-    "LGPL-2.0",
-    "LGPL-2.1",
-    "LGPL-3.0",
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+]
+exceptions = [
+    # Format: { allow = ["LICENSE"], crate = "specific-crate" }
 ]
 
+# -----------------------------------------------------------------------------
+# Bans — supply-chain hygiene
+# -----------------------------------------------------------------------------
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
@@ -41,6 +83,11 @@ highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
 
+# -----------------------------------------------------------------------------
+# Sources — provenance verification (PS.3.2, PW.4.4)
+# -----------------------------------------------------------------------------
+# Registry locked to crates.io. Unknown registries or git sources produce a
+# warning so any addition shows up in code review and can be evaluated.
 [sources]
 unknown-registry = "warn"
 unknown-git = "warn"

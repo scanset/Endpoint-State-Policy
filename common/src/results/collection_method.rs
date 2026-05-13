@@ -5,14 +5,11 @@
 //!
 //! # Architecture
 //!
-//! Collectors always populate `CollectionMethod` with full details (command, inputs).
-//! The output format controls what gets serialized:
-//!
-//! - `attestation` mode: Only `method_type` in summary (CUI-free)
-//! As of v2.0.0 there are no feature gates: every `CollectionMethod` carries
-//! `command` + `inputs` unconditionally. The envelope is always the full
-//! assessor shape — consumers that don't want those fields can drop them
-//! post-serialization.
+//! Collectors always populate `CollectionMethod` with full details
+//! (command, inputs). Since v2.0.0 there are no feature gates: every
+//! `CollectionMethod` carries `command` + `inputs` unconditionally. The
+//! envelope is always the full assessor shape; consumers that don't want
+//! those fields can drop them post-serialization.
 //!
 //! # Example
 //!

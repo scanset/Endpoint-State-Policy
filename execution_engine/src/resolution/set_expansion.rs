@@ -94,6 +94,25 @@ fn expand_set_ref_in_declaration_helper(
     let mut was_expanded = false;
     let mut new_object_refs = Vec::new();
 
+    // Phase 0: Direct CTN-level SET_REFs (the
+    // `criterion_node.set_refs` AST field). Resolve each into the
+    // underlying OBJECT_REFs and append to object_refs. Per EBNF
+    // ctn_content allows SET_REFs alongside OBJECT_REFs; the parser
+    // gating was relaxed in the same change that added this branch.
+    if !declaration.set_refs.is_empty() {
+        let set_refs_drained: Vec<_> = declaration.set_refs.drain(..).collect();
+        for set_ref in set_refs_drained {
+            let expanded = expand_set_ref_to_object_refs(
+                &set_ref.set_id,
+                &set_ref.set_id, // No bag object id; use set_id for tracing
+                &declaration.criterion_type,
+                resolved_sets,
+            )?;
+            new_object_refs.extend(expanded);
+            was_expanded = true;
+        }
+    }
+
     // Phase 1: Check local object for SET_REF
     if let Some(local_obj) = &declaration.local_object {
         if let Some(set_id) = extract_set_ref_from_declaration_object(local_obj) {

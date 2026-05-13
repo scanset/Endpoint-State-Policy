@@ -926,6 +926,13 @@ pub struct CriterionNode {
     pub state_refs: Vec<StateRef>,
     /// Object references
     pub object_refs: Vec<ObjectRef>,
+    /// Set references. Each SET_REF resolves at execution time into a
+    /// list of object references via `set_expansion`. Lets policy authors
+    /// keep the CTN block immutable while the bound-asset list (the SET
+    /// body) changes -- the spec/AI workflow surface in
+    /// `specs/ai-workflows.md` §3.2 relies on this shape.
+    #[serde(default)]
+    pub set_refs: Vec<SetRef>,
     /// Local states (CTN-level, non-referenceable)
     pub local_states: Vec<StateDefinition>,
     /// Local object (CTN-level, non-referenceable)

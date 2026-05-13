@@ -1,7 +1,8 @@
-//! Policy identity for ESP attestations
+//! Policy identity for ESP result envelopes
 //!
-//! Provides a lightweight structure for identifying policies in attestations
-//! without including CUI (Controlled Unclassified Information).
+//! Lightweight identifying metadata for policies in result envelopes:
+//! `policy_id`, `platform`, `criticality`, `control_mappings`, and the
+//! META fields that drive compliance framework mapping.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,10 +31,10 @@ pub const KNOWN_META_FIELDS: &[&str] = &[
 // PolicyIdentity
 // ============================================================================
 
-/// Identity information for a policy in attestations
+/// Identity information for a policy in result envelopes
 ///
-/// Contains the minimum information needed to identify a policy
-/// and its compliance framework mappings without CUI.
+/// Contains the minimum information needed to identify a policy and its
+/// compliance framework mappings.
 ///
 /// ## Field Categories
 ///

@@ -1,14 +1,36 @@
-# ESP v2.0.0 - Canonical Execution Schema
+# ESP v2.1.1 - Canonical Execution Schema
 
-**Version:** 2.0.0
+**Version:** 2.1.1
 **Status:** Normative (supersedes v1.2.0 / `09_ESP_Canonical_Schema_v1_1_0.md`)
-**Last Updated:** 2026-04-20
+**Last Updated:** 2026-05-13
 
 ---
 
-## 0. What's New in v2.0.0
+## 0. What's New
 
-v2.0.0 is a breaking schema revision. Two structural changes and one clarification:
+### v2.1.1 (over v2.1.0)
+
+- **`PackageInfo` shrinks.** The `contains_cui` and `distribution`
+  fields are removed from `PackageInfo`. The envelope no longer makes
+  a data-classification claim; classification belongs to the
+  consumer pipeline's own framework. The §6 sensitivity-tiers table
+  is rewritten as consumer-applied filter recipes rather than
+  format-encoded shapes.
+
+### v2.1.0 (additive over v2.0.0)
+
+- **`replay_hash_version: u8` field on `ResultEnvelope`.** Marks which
+  replay-hash scheme produced this envelope's `replay_hash`. Defaults to
+  `1` (the v2.0.0 hash scheme) via `#[serde(default)]`, so v2.0.0
+  envelopes deserialize cleanly into v2.1.0 readers, and v2.1.0
+  envelopes produced with the default scheme remain readable by v2.0.0
+  consumers. An opt-in `2` value selects the per-OBJECT hash scheme; see
+  `execution_engine::types::canonical_manifest` for the leaf-hash
+  primitive.
+
+### v2.0.0
+
+v2.0.0 was a breaking schema revision. Two structural changes and one clarification:
 
 1. **Polymorphic `host`.** The `host` object is no longer a Linux/Windows-shaped record. It carries a free-string `host_type` discriminator (dotted `<provider>.<kind>`, e.g. `azure.vm`, `aws.account`, `m365.tenant`, `entra.tenant`, `linux.vm`) and a host-type-specific `attrs` map. Fields that made sense only for VMs (`hostname`, `os`, `arch`) are now optional and live alongside `attrs`.
 2. **Evidence as a first-class entity.** Evidence is lifted out of per-policy result objects into a top-level `observations[]` array. Each observation has a stable `uuid`, a `host_ref`, and a `content_hash` over its body bytes. Per-policy results reference observations by uuid via `observation_refs[]`. A single filesystem read or API call can now be cited by many policies without duplication.
@@ -41,12 +63,13 @@ Unchanged from v1.2.0 Section 2 except:
 {
   "envelope": {
     "result_id": "string",
-    "schema_version": "2.0.0",
+    "schema_version": "2.1.0",
     "agent": {},
     "host": {},
     "started_at": "string",
     "completed_at": "string",
     "replay_hash": "string",
+    "replay_hash_version": 1,
     "signature": {},
     "identity_status": {}
   },
@@ -63,7 +86,10 @@ Unchanged from v1.2.0 Section 2 except:
 
 ### 3.2 Envelope Fields
 
-Unchanged except `schema_version` MUST be `"2.0.0"` for v2.0.0 producers.
+Unchanged except `schema_version` MUST be `"2.1.0"` for v2.1.0 producers
+(`"2.0.0"` for v2.0.0 producers; both remain interoperable on the wire).
+`replay_hash_version` MUST be present in v2.1.0 envelopes (defaults to `1`
+via `#[serde(default)]` when missing; v2.0.0 producers omit it).
 
 ### 3.3 Agent Information
 
@@ -257,16 +283,24 @@ Unchanged from v1.2.0 Section 5 **except**:
 
 ---
 
-## 6. Output Format Differences
+## 6. Sensitivity Tiers (Consumer Filtering)
 
-| Format        | `host`  | `observations[]` bodies | `observation_refs` | `content_hash` | Signature |
+The agent emits one signed envelope shape. Narrower views are derived
+by post-emission filtering. The replay hash is invariant under every
+recipe, so filtered extracts remain verifiably linked to the
+unfiltered envelope by hash equality.
+
+| Filter recipe | `host`  | `observations[]` bodies | `observation_refs` | `content_hash` | Signature |
 |---------------|---------|-------------------------|--------------------|----------------|-----------|
-| `summary`     | minimal | absent                  | absent             | absent         | No        |
-| `attestation` | full    | absent (refs only)      | present            | present        | Yes       |
-| `full`        | full    | present                 | present            | present        | Yes       |
-| `assessor`    | full    | present + reproducibility | present          | present        | Yes       |
+| Summary-equivalent     | full    | absent                  | absent             | present (refs) | Yes       |
+| Attestation-equivalent | full    | absent                  | present            | present        | Yes       |
+| Full (as emitted)      | full    | present + reproducibility | present          | present        | Yes       |
 
-`attestation` shrinks: observations carry only `uuid + host_ref + collected_at + method + content_hash`. Bodies drop. This is the CUI-safe wire format.
+Under the attestation-equivalent recipe, observations carry only
+`uuid + host_ref + collected_at + method + content_hash`. Bodies and
+findings drop. The unfiltered envelope is what the agent's signature
+covers; consumers re-signing a filtered extract are producing a
+distinct attestation (see Trust Model §7.4).
 
 ---
 

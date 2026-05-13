@@ -349,13 +349,19 @@ Runtime preferences are configured via environment variables and can be customiz
 |----------|---------|-------------|
 | `ESP_LOGGING_USE_STRUCTURED` | `false` | Use JSON structured logging |
 | `ESP_LOGGING_ENABLE_CONSOLE` | `false` | Enable console output |
-| `ESP_LOGGING_MIN_LEVEL` | `info` | Minimum log level (see 5.8) |
+| `ESP_LOGGING_MIN_LEVEL` | `info` | Minimum log level (see 5.9) |
 | `ESP_LOGGING_LOG_PERFORMANCE` | `true` | Log performance events |
 | `ESP_LOGGING_LOG_SECURITY` | `true` | Log security metrics |
 | `ESP_LOGGING_CARGO_STYLE` | `true` | Use cargo-style error output |
 | `ESP_LOGGING_INCLUDE_FILE_CONTEXT` | `true` | Include file context in messages |
 
-### 5.8 Log Levels
+### 5.8 Execution Engine Preferences
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ESP_CTN_TIMEOUT_SECS` | `600` | Per-criterion collection timeout (seconds). Bounds the wall-clock time `execute_single_criterion` will wait for setup + collection + filtering before failing the criterion. The 600s default suits agentless and cloud-control-plane channels where per-OBJECT round-trips can carry 15–30s of cloud API overhead. Set to a smaller value (e.g. `30`) for agent-mode-only deployments where every collection is a local subprocess. Parsed as `u64`; falls back to the default on parse failure or absence. Introduced in v2.2.1. |
+
+### 5.9 Log Levels
 
 The `ESP_LOGGING_MIN_LEVEL` variable accepts:
 

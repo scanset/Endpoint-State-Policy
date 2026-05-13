@@ -1,9 +1,13 @@
-# ESP v1.0.0 — EBNF Grammar Specification
+# ESP v2.1.0 — EBNF Grammar Specification
 
-**Version:** 1.0.0
-**Status:** Normative
-**Last Updated:** 2026-01-08
+**Version:** 2.1.0
+**Status:** Normative (v1.0.0 baseline + v2.1.0 extensions)
+**Last Updated:** 2026-04-28
 **Standards:** ISO 14977 EBNF with extensions
+
+> **What's new in v2.1.0:** `SET_REF` is now a first-class CTN content
+> operand (see `ctn_content` in §7). The rest of the grammar is
+> unchanged from v1.0.0.
 
 ---
 
@@ -263,6 +267,7 @@ criterion_type ::= identifier
 ctn_content ::= test_spec
                 state_reference*
                 object_reference*
+                set_reference*
                 ctn_state*
                 ctn_object?
 

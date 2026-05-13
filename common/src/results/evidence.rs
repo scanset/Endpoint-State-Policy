@@ -1,8 +1,9 @@
 //! Evidence types for ESP scan results
 //!
 //! Evidence contains the raw collected data from policy execution.
-//! This is CUI (Controlled Unclassified Information) and should only
-//! be included in full results, not attestations.
+//! Since v2.0.0 evidence is carried via `ResultEnvelope.observations[]`
+//! at the envelope level; the legacy `PolicyResult.evidence` shape is
+//! preserved here for back-compat during the transition window.
 //!
 //! ## Structure
 //!
@@ -13,12 +14,6 @@
 //! │   └── method          - CollectionMethod (assessor traceability)
 //! └── collected_at        - Timestamp when evidence was gathered
 //! ```
-//!
-//! ## Attestation vs Full Results
-//!
-//! - **Attestations**: Include `evidence_hash` (SHA-256 of evidence), not actual data
-//! - **Full Results**: Include complete `Evidence` structure with all collected values
-//! - **Assessor Evidence**: Include `CollectionMethod` with command/input details
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -31,8 +26,8 @@ use super::collection_method::CollectionMethod;
 
 /// Raw evidence data collected during scan execution
 ///
-/// Contains the actual system configuration values gathered during collection.
-/// This is CUI and should not be transmitted over untrusted networks.
+/// Contains the actual system configuration values gathered during
+/// collection.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Evidence {
     /// Collected data keyed by object ID
@@ -213,13 +208,12 @@ impl CollectionRecord {
 }
 
 // ============================================================================
-// EvidenceSummary (for attestations)
+// EvidenceSummary
 // ============================================================================
 
-/// Summary of evidence for attestations (CUI-free)
+/// Summary of evidence metadata
 ///
-/// Provides metadata about collected evidence without actual values.
-/// Safe for network transport.
+/// Provides metadata about collected evidence without the actual values.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvidenceSummary {
     /// SHA-256 hash of the evidence data
@@ -262,7 +256,7 @@ impl EvidenceSummary {
     }
 }
 
-/// Summary of a collection operation (CUI-free)
+/// Summary of a collection operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionSummary {
     /// Object ID that was collected

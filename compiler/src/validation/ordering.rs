@@ -145,17 +145,24 @@ fn validate_ctn_logical_consistency(
     let has_state_refs = !ctn.state_refs.is_empty();
     let has_local_states = !ctn.local_states.is_empty();
     let has_object_refs = !ctn.object_refs.is_empty();
+    let has_set_refs = !ctn.set_refs.is_empty();
     let has_local_object = ctn.local_object.is_some();
 
     log_debug!("CTN consistency check",
         "has_state_refs" => has_state_refs,
         "has_local_states" => has_local_states,
         "has_object_refs" => has_object_refs,
+        "has_set_refs" => has_set_refs,
         "has_local_object" => has_local_object
     );
 
     // A CTN should have at least some validation mechanism
-    if !has_state_refs && !has_local_states && !has_object_refs && !has_local_object {
+    if !has_state_refs
+        && !has_local_states
+        && !has_object_refs
+        && !has_set_refs
+        && !has_local_object
+    {
         let error = StructuralError::block_ordering_violation(
             "CTN",
             "CTN block has no validation states or objects",
@@ -216,6 +223,7 @@ fn validate_test_compatibility(ctn: &nodes::CriterionNode, _span: Span) {
     let has_validation_mechanisms = !ctn.state_refs.is_empty()
         || !ctn.local_states.is_empty()
         || !ctn.object_refs.is_empty()
+        || !ctn.set_refs.is_empty()
         || ctn.local_object.is_some();
 
     if !has_validation_mechanisms {

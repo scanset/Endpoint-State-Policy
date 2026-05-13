@@ -382,11 +382,12 @@ fn execute_split(
                     });
                 }
             }
-            RunParameter::Literal(crate::types::common::Value::String(s)) => {
-                if input_string.is_none() {
-                    input_string = Some(s.clone());
-                }
+            RunParameter::Literal(crate::types::common::Value::String(s))
+                if input_string.is_none() =>
+            {
+                input_string = Some(s.clone());
             }
+            RunParameter::Literal(crate::types::common::Value::String(_)) => {}
             RunParameter::Literal(_) => {}
             RunParameter::Delimiter(delim) => {
                 delimiter = Some(delim.clone());
@@ -452,11 +453,12 @@ fn execute_substring(
                     });
                 }
             }
-            RunParameter::Literal(crate::types::common::Value::String(s)) => {
-                if input_string.is_none() {
-                    input_string = Some(s.clone());
-                }
+            RunParameter::Literal(crate::types::common::Value::String(s))
+                if input_string.is_none() =>
+            {
+                input_string = Some(s.clone());
             }
+            RunParameter::Literal(crate::types::common::Value::String(_)) => {}
             RunParameter::Literal(_) => {}
             RunParameter::StartPosition(start) => {
                 start_pos = Some(*start);
@@ -578,11 +580,12 @@ fn execute_regex_capture(
                     });
                 }
             }
-            RunParameter::Literal(crate::types::common::Value::String(s)) => {
-                if input_string.is_none() {
-                    input_string = Some(s.clone());
-                }
+            RunParameter::Literal(crate::types::common::Value::String(s))
+                if input_string.is_none() =>
+            {
+                input_string = Some(s.clone());
             }
+            RunParameter::Literal(crate::types::common::Value::String(_)) => {}
             RunParameter::Literal(_) => {}
             RunParameter::Pattern(pat) => {
                 pattern = Some(pat.clone());

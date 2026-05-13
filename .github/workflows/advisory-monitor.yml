@@ -1,0 +1,48 @@
+name: Advisory Monitor
+
+# Daily RustSec advisory scan against the workspace's pinned dependencies.
+# Catches advisories that fire *after* a PR has merged — when no PR-triggered
+# CI run would otherwise notice. Opens an issue on the repo when an advisory
+# hits an existing dependency.
+#
+# NIST SP 800-218 SSDF mapping:
+#   RV.1.1 — Gather vulnerability information from internal and external sources.
+#   PW.8.2 — Use automated mechanisms to detect existing vulnerabilities.
+
+on:
+  schedule:
+    # 09:00 UTC daily. The RustSec advisory database is updated multiple
+    # times per day; once-daily polling matches typical patch cycles.
+    - cron: "0 9 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    name: cargo audit (daily)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: advisory-monitor
+
+      - name: Run cargo audit
+        # rustsec-action runs cargo-audit against the workspace and
+        # automatically files an issue if any advisory matches a
+        # dependency in Cargo.lock. Issue includes the advisory id,
+        # affected package, and remediation guidance.
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

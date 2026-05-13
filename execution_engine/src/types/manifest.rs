@@ -267,7 +267,7 @@ pub struct ExecutionManifest {
     // ========================================================================
     // Findings
     // ========================================================================
-    /// Compliance findings for failed validations (CUI)
+    /// Compliance findings for failed validations
     ///
     /// Contains expected vs actual values for non-passing criteria.
     pub findings: Vec<ComplianceFinding>,

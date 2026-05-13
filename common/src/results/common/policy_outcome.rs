@@ -1,7 +1,8 @@
-//! Policy outcome - shared base type for attestation and full results
+//! Policy outcome - core evaluation data
 //!
-//! This type contains the CUI-free core data about a policy evaluation
-//! that is shared between attestations (network-safe) and full results (local storage).
+//! Per-policy result type carried inside `AssessorPackage.policies[]`.
+//! Holds the policy's identity, pass/fail outcome, criteria counts, and
+//! control mappings.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,10 +11,10 @@ use super::counts::CriteriaCounts;
 use super::criticality::{Criticality, Weight};
 use super::outcome::Outcome;
 
-/// Core policy evaluation result - shared between attestation and full results
+/// Core policy evaluation result
 ///
-/// This contains only CUI-free metadata about the policy evaluation.
-/// It is safe for network transport.
+/// Holds the policy's identity, pass/fail outcome, criteria counts, and
+/// control mappings for one policy execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyOutcome {
     /// Policy identifier from META esp_scan_id

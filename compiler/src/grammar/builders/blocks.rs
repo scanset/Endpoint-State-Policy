@@ -480,6 +480,7 @@ pub fn parse_criterion_node(parser: &mut dyn Parser) -> Result<CriterionNode, St
 
     let mut state_refs = Vec::new();
     let mut object_refs = Vec::new();
+    let mut set_refs: Vec<SetRef> = Vec::new();
     let mut local_states = Vec::new();
     let mut local_object = None;
 
@@ -506,6 +507,14 @@ pub fn parse_criterion_node(parser: &mut dyn Parser) -> Result<CriterionNode, St
                     span: Some(parser.current_span()),
                 });
             }
+            Some(Token::Keyword(Keyword::SetRef)) => {
+                parser.advance(); // consume SET_REF
+                let set_id = parser.expect_identifier()?;
+                set_refs.push(SetRef {
+                    set_id,
+                    span: Some(parser.current_span()),
+                });
+            }
             Some(Token::Keyword(Keyword::State)) => {
                 let mut state = parse_state_definition(parser)?;
                 state.is_global = false; // CTN-level states are local
@@ -529,6 +538,7 @@ pub fn parse_criterion_node(parser: &mut dyn Parser) -> Result<CriterionNode, St
         test,
         state_refs,
         object_refs,
+        set_refs,
         local_states,
         local_object,
         span: Some(parser.current_span()),
