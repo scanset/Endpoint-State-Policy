@@ -18,10 +18,10 @@
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file://./execution_engine#2.2.2",
+      "bom-ref": "path+file://./execution_engine#2.2.3",
       "author": "ESP Team",
       "name": "execution_engine",
-      "version": "2.2.2",
+      "version": "2.2.3",
       "description": "ESP scanner base",
       "scope": "required",
       "licenses": [
@@ -29,14 +29,14 @@
           "expression": "MIT OR Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/execution_engine@2.2.2?download_url=file://.",
+      "purl": "pkg:cargo/execution_engine@2.2.3?download_url=file://.",
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file://./execution_engine#2.2.2 bin-target-0",
+          "bom-ref": "path+file://./execution_engine#2.2.3 bin-target-0",
           "name": "execution_engine",
-          "version": "2.2.2",
-          "purl": "pkg:cargo/execution_engine@2.2.2?download_url=file://.#src/lib.rs"
+          "version": "2.2.3",
+          "purl": "pkg:cargo/execution_engine@2.2.3?download_url=file://.#src/lib.rs"
         }
       ]
     },
@@ -50,10 +50,10 @@
   "components": [
     {
       "type": "library",
-      "bom-ref": "path+file://./common#2.2.2",
+      "bom-ref": "path+file://./common#2.2.3",
       "author": "Curtis Slone <curtis@scanset.io>",
       "name": "common",
-      "version": "2.2.2",
+      "version": "2.2.3",
       "description": "Common types and utilities shared across ESP crates",
       "scope": "required",
       "licenses": [
@@ -61,7 +61,7 @@
           "expression": "MIT OR Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/common@2.2.2?download_url=file://../common",
+      "purl": "pkg:cargo/common@2.2.3?download_url=file://../common",
       "externalReferences": [
         {
           "type": "website",
@@ -1807,7 +1807,7 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file://./common#2.2.2",
+      "ref": "path+file://./common#2.2.3",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.42",
         "registry+https://github.com/rust-lang/crates.io-index#openssl@0.10.75",
@@ -1816,12 +1816,12 @@
       ]
     },
     {
-      "ref": "path+file://./execution_engine#2.2.2",
+      "ref": "path+file://./execution_engine#2.2.3",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#base64@0.21.7",
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.42",
         "registry+https://github.com/rust-lang/crates.io-index#clap@4.5.53",
-        "path+file://./common#2.2.2",
+        "path+file://./common#2.2.3",
         "registry+https://github.com/rust-lang/crates.io-index#hostname@0.3.1",
         "registry+https://github.com/rust-lang/crates.io-index#num_cpus@1.17.0",
         "registry+https://github.com/rust-lang/crates.io-index#regex@1.12.2",

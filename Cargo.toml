@@ -3,7 +3,7 @@ resolver = "2"
 members = ["common", "compiler", "execution_engine"]
 
 [workspace.package]
-version = "2.2.2"
+version = "2.2.3"
 edition = "2021"
 authors = ["Curtis Slone <curtis@scanset.io>"]
 license = "MIT OR Apache-2.0"
@@ -23,9 +23,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # rejects path-only deps for publishable crates because crates.io won't
 # accept them. The `changelog_version_coupling` test asserts this stays
 # in sync.
-common = { path = "common", version = "2.2.2" }
-compiler = { path = "compiler", version = "2.2.2" }
-execution_engine = { path = "execution_engine", version = "2.2.2" }
+common = { path = "common", version = "2.2.3" }
+compiler = { path = "compiler", version = "2.2.3" }
+execution_engine = { path = "execution_engine", version = "2.2.3" }
 
 [profile.dev]
 opt-level = 0

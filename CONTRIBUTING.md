@@ -116,9 +116,9 @@ Try to keep changes scoped to the appropriate crate.
 
 ### Prerequisites
 
-- Rust **1.70+**
+- Rust **1.85+**
 - Cargo
-- Git
+- Git **configured to sign commits** (see [Signed Commits](#signed-commits) below)
 
 ### Build
 
@@ -185,6 +185,76 @@ If you believe a change could impact security:
 
 Security issues should not be reported via public issues.  
 Please email: **curtis@scanset.io**
+
+---
+
+## Signed Commits
+
+ESP is delivered into federal-compliance contexts and requires a
+verifiable authorship chain. **All commits on `main` must be signed.**
+The `Require signed commits` branch-protection rule is enforced on
+`main`; unsigned commits will be rejected at PR merge.
+
+### One-time setup (GPG)
+
+1. Generate a signing key if you don't have one:
+
+   ```bash
+   gpg --full-generate-key   # RSA 4096 or Ed25519 recommended
+   ```
+
+2. Export the public key and add it to your GitHub account:
+
+   ```bash
+   gpg --armor --export YOUR_KEY_ID
+   # paste into https://github.com/settings/keys → "New GPG key"
+   ```
+
+3. Configure git to sign by default:
+
+   ```bash
+   git config --global user.signingkey YOUR_KEY_ID
+   git config --global commit.gpgsign true
+   git config --global tag.gpgsign true
+   ```
+
+### One-time setup (SSH, simpler)
+
+If you'd rather sign with your SSH key:
+
+```bash
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+```
+
+Then add the same SSH key under "Signing key" in your GitHub settings
+(separate from the "Authentication key" entry, even if it's the same
+key material).
+
+### Verifying it worked
+
+After a commit:
+
+```bash
+git log --show-signature -1
+```
+
+The commit should show `Good signature from "Your Name <email>"`. On
+GitHub, the commit listing displays a green **Verified** badge.
+
+### Release tags
+
+Maintainers cutting a release tag (`vX.Y.Z`) must sign the tag — this
+is the trust root that downstream consumers verify against the
+release artifacts (see [`docs/SIGNING.md`](docs/SIGNING.md)). The
+release workflow rejects unsigned tags.
+
+```bash
+git tag -s vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
 
 ---
 

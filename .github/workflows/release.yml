@@ -1,0 +1,256 @@
+name: Release
+
+# Triggered when a `v*.*.*` git tag is pushed. Builds the workspace
+# in release mode with cargo-auditable (so binaries carry their
+# dependency tree internally), generates the SBOM, signs everything
+# with Sigstore cosign (keyless via OIDC), and attaches SLSA build
+# provenance to each artifact. Final artifacts + signatures land on a
+# GitHub Release.
+#
+# NIST SP 800-218 SSDF mapping:
+#   PS.2     — Software release integrity (cosign signatures over
+#              binaries and SBOMs; SLSA provenance over the build).
+#   PS.3.1   — Archive each release (GitHub Release retains artifacts).
+#   PS.3.2   — Provenance data for components (SBOM ships per release).
+#   PW.4.4   — Verify components (cargo-auditable lets consumers run
+#              `cargo audit bin` post-distribution).
+#
+# Consumer verification workflow is documented in docs/SIGNING.md.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v2.2.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: write       # create the GitHub Release
+  id-token: write       # OIDC token for Sigstore keyless signing
+  attestations: write   # SLSA build provenance via attest-build-provenance
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive-ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive-ext: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Install cargo-auditable
+        run: cargo install --locked cargo-auditable
+
+      - name: Build (release, auditable)
+        env:
+          ESP_BUILD_PROFILE: production
+        run: cargo auditable build --release --workspace --target ${{ matrix.target }}
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p staging
+          # Adjust the binary list as the workspace produces real binaries.
+          # The compiler crate exposes a binary target; engine + common are libs.
+          cp target/${{ matrix.target }}/release/compiler staging/esp-compiler || true
+          cp LICENSE README.md CHANGELOG.md staging/
+          cp -r docs/sbom staging/sbom
+          tar -czf esp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C staging .
+          sha256sum esp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
+            > esp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          if (Test-Path "target/${{ matrix.target }}/release/compiler.exe") {
+            Copy-Item "target/${{ matrix.target }}/release/compiler.exe" "staging/esp-compiler.exe"
+          }
+          Copy-Item LICENSE,README.md,CHANGELOG.md staging/
+          Copy-Item -Recurse docs/sbom staging/sbom
+          Compress-Archive -Path staging/* -DestinationPath "esp-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          (Get-FileHash "esp-${{ github.ref_name }}-${{ matrix.target }}.zip" -Algorithm SHA256).Hash + "  esp-${{ github.ref_name }}-${{ matrix.target }}.zip" `
+            | Out-File -Encoding ascii "esp-${{ github.ref_name }}-${{ matrix.target }}.zip.sha256"
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: |
+            esp-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive-ext }}
+            esp-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive-ext }}.sha256
+          retention-days: 14
+
+      - name: Attach SLSA build provenance
+        # Produces an in-toto SLSA v1 attestation per archive,
+        # tied to the workflow run via GitHub's OIDC token. Auditors
+        # can verify with `gh attestation verify <artifact> --repo ...`.
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: esp-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive-ext }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign archive with cosign (keyless)
+        # Sigstore keyless signing: an ephemeral cert is issued by Fulcio
+        # against the workflow's OIDC identity, the signature is recorded
+        # in the Rekor transparency log, and consumers verify with
+        # `cosign verify-blob --certificate-identity ... --certificate-oidc-issuer ...`.
+        run: |
+          cosign sign-blob --yes \
+            --output-signature   "esp-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive-ext }}.sig" \
+            --output-certificate "esp-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive-ext }}.crt" \
+            "esp-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive-ext }}"
+        shell: bash
+
+      - name: Upload signature artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: signatures-${{ matrix.target }}
+          path: |
+            esp-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive-ext }}.sig
+            esp-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive-ext }}.crt
+          retention-days: 14
+
+  sbom:
+    name: SBOM + cosign signatures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-sbom
+
+      - name: Install cargo-cyclonedx
+        run: cargo install --locked cargo-cyclonedx
+
+      - name: Regenerate SBOM
+        run: make sbom
+
+      - name: Verify SBOM is canonical
+        # If `make sbom` changes anything from the committed copy, the
+        # release tag was cut against a stale Cargo.lock state. Fail
+        # rather than ship an inconsistent SBOM.
+        run: |
+          if ! git diff --exit-code -- docs/sbom/; then
+            echo "::error::SBOM differs from committed copy. Run \`make sbom\` and re-tag."
+            exit 1
+          fi
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign every SBOM with cosign (keyless)
+        run: |
+          for f in docs/sbom/*.cdx.json; do
+            cosign sign-blob --yes \
+              --output-signature "$f.sig" \
+              --output-certificate "$f.crt" \
+              "$f"
+          done
+
+      - name: Attach SLSA provenance for SBOMs
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: docs/sbom/*.cdx.json
+
+      - name: Upload SBOM bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-bundle
+          path: |
+            docs/sbom/*.cdx.json
+            docs/sbom/*.sig
+            docs/sbom/*.crt
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: [build, sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage release files
+        run: |
+          mkdir -p release
+          # Archives + their per-archive signatures + checksums
+          find artifacts -type f \
+            \( -name '*.tar.gz' -o -name '*.zip' \
+               -o -name '*.sig' -o -name '*.crt' \
+               -o -name '*.sha256' -o -name '*.cdx.json' \) \
+            -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            ESP release ${{ github.ref_name }}.
+
+            **Verification:** see [docs/SIGNING.md](docs/SIGNING.md) for the
+            step-by-step workflow. In brief:
+
+            ```bash
+            # SLSA build provenance (artifact built from this commit by this workflow)
+            gh attestation verify <archive> --repo ${{ github.repository }}
+
+            # cosign signature (artifact signed via Sigstore OIDC)
+            cosign verify-blob \
+              --certificate         <archive>.crt \
+              --signature           <archive>.sig \
+              --certificate-identity-regexp '^https://github.com/${{ github.repository }}/.+' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              <archive>
+            ```
+
+            Artifacts:
+            - Release archives (`.tar.gz` for Linux, `.zip` for Windows)
+            - Per-archive SHA-256 checksums (`*.sha256`)
+            - Per-artifact cosign signatures (`*.sig`) and certificates (`*.crt`)
+            - CycloneDX SBOMs for `common`, `compiler`, `execution_engine` with cosign signatures
+            - SLSA v1 build-provenance attestations (attached to the workflow run; verify with `gh attestation verify`)
+          files: release/*
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false

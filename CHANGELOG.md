@@ -1,5 +1,95 @@
 # Changelog with Security Notes
 
+## [2.2.3] — 2026-05-13
+
+**Supply-chain + CI infrastructure.** No engine API or wire-schema
+changes; everything in this release is tooling, automation, and
+provenance plumbing required for NIST SP 800-218 SSDF compliance and
+the signed-release pipeline.
+
+### Added
+
+- **CI workflow** (`.github/workflows/ci.yml`) — five parallel gating
+  jobs (lint / test / security / sbom-freshness / build) plus an
+  aggregator status check. `Swatinem/rust-cache@v2` for cache reuse.
+- **Advisory-monitor workflow** (`.github/workflows/advisory-monitor.yml`)
+  — daily cron against the RustSec advisory DB; opens an issue on
+  match. Covers SSDF RV.1.1 / PW.8.2.
+- **Release workflow** (`.github/workflows/release.yml`) — tag-triggered
+  pipeline that builds release archives with `cargo-auditable`,
+  attaches SLSA v1 build-provenance attestations, signs every artifact
+  and SBOM with **Sigstore cosign keyless** (OIDC), and publishes a
+  GitHub Release with verification instructions. Covers SSDF PS.2 /
+  PS.3.1 / PS.3.2 / PW.4.4.
+- **CycloneDX 1.5 SBOM generation** (`make sbom`, `cargo-cyclonedx`,
+  `scripts/normalize_sbom.py`). Per-crate SBOMs committed under
+  `docs/sbom/`. Reproducible across machines: the normalizer strips
+  the volatile `serialNumber`, pins `metadata.timestamp`, and rewrites
+  absolute checkout paths in `bom-ref` values to workspace-relative
+  form.
+- **Drift-coupling integration tests** — three tests that catch
+  doc-vs-code drift the CI alone wouldn't:
+  - `schema_doc_coupling.rs` — `SCHEMA_VERSION` constant ↔ canonical
+    schema doc title.
+  - `changelog_version_coupling.rs` — top CHANGELOG entry ↔
+    `workspace.package.version` **and** every path-versioned
+    `workspace.dependencies` entry ↔ the same.
+  - `grammar_coupling.rs` — EBNF quoted terminals ↔ parser
+    `reserved_keywords()`, both directions, with an explicit
+    allow-list for legitimate non-keyword terminals (operators, META
+    fields, RUN parameters, enum values).
+- **Makefile targets** — `make ready` (auto-fix + full gate),
+  `make sbom`, `make build-auditable`, `make install-hooks`,
+  modernized `make security`. `make install-tools` now installs
+  cargo-deny, cargo-cyclonedx, cargo-auditable.
+- **Git pre-commit hook** (`scripts/git-pre-commit`, installed via
+  `make install-hooks`) — fast local gate: `cargo fmt --check` plus
+  SBOM-freshness check when `Cargo.lock` is in the commit.
+- **`docs/SIGNING.md`** — step-by-step verification workflow for
+  consumers (SLSA via `gh attestation verify`, cosign signature
+  verification, post-distribution audit via `cargo audit bin`).
+- **`CONTRIBUTING.md` — Signed Commits section** — GPG and SSH setup
+  flows. Branch protection on `main` enforces signed commits.
+- **`docs/sbom/README.md`** — describes the artifacts, SSDF mapping,
+  regeneration cadence, and the cargo-auditable binary-embedded SBOM
+  workflow.
+
+### Changed
+
+- **`deny.toml` modernized to cargo-deny v2 schema** with explicit
+  NIST SP 800-218 SSDF task mapping in header comments
+  (PS.3.2 / PW.4.1 / PW.4.4 / PW.8.2 / RV.1.1). `allow-wildcard-paths`
+  enabled and the license allow-list extended (BSD-2-Clause,
+  Apache-2.0 WITH LLVM-exception, Unicode-3.0, Zlib).
+- **`workspace.dependencies` path entries now carry explicit
+  versions** (`common = { path = "common", version = "2.2.3" }`).
+  cargo-deny rejects path-only deps for publishable crates; the new
+  drift-coupling test asserts this stays in sync with
+  `workspace.package.version`.
+- **Stripped CUI references from documentation** (already removed
+  from the wire schema in 2.2.2). v2.0.0 cross-reference banners,
+  Overview, Trust Model, Schema, vectors_v2 README, common/README all
+  updated.
+
+### Removed
+
+- The placeholder `.github/workflows/github_workflows_ci.yml` (no longer
+  required; replaced by the new `ci.yml`).
+- The dead `contract_kit` reference from `[workspace.dependencies]`.
+
+### Migration
+
+None required for engine consumers. Maintainers cutting a release
+should:
+
+1. Run `make install-tools` to install cargo-deny, cargo-cyclonedx,
+   cargo-auditable.
+2. Run `make install-hooks` to wire the local pre-commit gate.
+3. Sign commits going forward (see CONTRIBUTING.md).
+4. Sign release tags: `git tag -s vX.Y.Z -m "Release vX.Y.Z"`.
+
+---
+
 ## [2.2.2] — 2026-05-13
 
 **Wire schema bumped `2.1.0` → `2.1.1`.** The envelope no longer makes a

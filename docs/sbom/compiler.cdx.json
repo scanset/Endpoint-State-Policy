@@ -19,10 +19,10 @@
     ],
     "component": {
       "type": "application",
-      "bom-ref": "path+file://./compiler#2.2.2",
+      "bom-ref": "path+file://./compiler#2.2.3",
       "author": "Curtis Slone <curtis@scanset.io>",
       "name": "compiler",
-      "version": "2.2.2",
+      "version": "2.2.3",
       "description": "ESP compiler for scanner SDK integration",
       "scope": "required",
       "licenses": [
@@ -30,21 +30,21 @@
           "expression": "MIT OR Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/compiler@2.2.2?download_url=file://.",
+      "purl": "pkg:cargo/compiler@2.2.3?download_url=file://.",
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file://./compiler#2.2.2 bin-target-0",
+          "bom-ref": "path+file://./compiler#2.2.3 bin-target-0",
           "name": "compiler",
-          "version": "2.2.2",
-          "purl": "pkg:cargo/compiler@2.2.2?download_url=file://.#src/lib.rs"
+          "version": "2.2.3",
+          "purl": "pkg:cargo/compiler@2.2.3?download_url=file://.#src/lib.rs"
         },
         {
           "type": "application",
-          "bom-ref": "path+file://./compiler#2.2.2 bin-target-1",
+          "bom-ref": "path+file://./compiler#2.2.3 bin-target-1",
           "name": "compiler",
-          "version": "2.2.2",
-          "purl": "pkg:cargo/compiler@2.2.2?download_url=file://.#src/main.rs"
+          "version": "2.2.3",
+          "purl": "pkg:cargo/compiler@2.2.3?download_url=file://.#src/main.rs"
         }
       ]
     },
@@ -58,10 +58,10 @@
   "components": [
     {
       "type": "library",
-      "bom-ref": "path+file://./common#2.2.2",
+      "bom-ref": "path+file://./common#2.2.3",
       "author": "Curtis Slone <curtis@scanset.io>",
       "name": "common",
-      "version": "2.2.2",
+      "version": "2.2.3",
       "description": "Common types and utilities shared across ESP crates",
       "scope": "required",
       "licenses": [
@@ -69,7 +69,7 @@
           "expression": "MIT OR Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/common@2.2.2?download_url=file://../common",
+      "purl": "pkg:cargo/common@2.2.3?download_url=file://../common",
       "externalReferences": [
         {
           "type": "website",
@@ -1271,7 +1271,7 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file://./common#2.2.2",
+      "ref": "path+file://./common#2.2.3",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.42",
         "registry+https://github.com/rust-lang/crates.io-index#openssl@0.10.75",
@@ -1280,10 +1280,10 @@
       ]
     },
     {
-      "ref": "path+file://./compiler#2.2.2",
+      "ref": "path+file://./compiler#2.2.3",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.42",
-        "path+file://./common#2.2.2",
+        "path+file://./common#2.2.3",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.228",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.148",
         "registry+https://github.com/rust-lang/crates.io-index#thiserror@1.0.69",
