@@ -8,6 +8,28 @@
 
 ---
 
+> [!NOTE]
+> ### 🚀 ProofLayer is now in public alpha — and it runs on this engine
+>
+> [**ProofLayer**](https://hub.docker.com/r/scanset/prooflayer-alpha-v0_1) is an
+> **agentless continuous-compliance platform** that turns each scan into a
+> signed, replay-hashable, transparency-logged **proof** mapped to controls
+> (FedRAMP 20x KSI, NIST 800-53 / 800-171, CMMC). ESP is its policy language and
+> execution engine — so the alpha is the fastest way to see ESP running inside a
+> full platform. Pull it and evaluate in a couple of minutes:
+>
+> ```bash
+> docker run -d -p 8080:80 -p 9090:8081 scanset/prooflayer-alpha-v0_1:0.1-alpha
+> # → http://localhost:8080   (login: super-admin / prooflayer)
+> ```
+>
+> **Docker Hub:** <https://hub.docker.com/r/scanset/prooflayer-alpha-v0_1>
+> &nbsp;·&nbsp; Alpha — non-FIPS, single-node, for evaluation, not production.
+> &nbsp;·&nbsp; Feedback / a platform or framework you need covered →
+> **contact@scanset.io**
+
+---
+
 ## Overview
 
 Endpoint State Policy (ESP) is a platform-agnostic policy language that separates **security intent** from **execution logic**. Policies are written as structured data, not imperative scripts, making them inspectable, testable, and portable across different scanner implementations.
@@ -56,30 +78,6 @@ ESP addresses these problems by:
 - **Human and machine readable** — Policies are inspectable by auditors and parseable by tools
 
 ESP focuses on **technical controls** — controls validated by inspecting endpoint state.
-
----
-
-## Policy Categories
-
-ESP policies fall into one of two categories based on what an OBJECT
-represents:
-
-| Category | What the OBJECT is | Example |
-|---|---|---|
-| **asset-internal** | An item being scanned **on** a resource. The policy runs against the resource itself. | RHEL9 host checking an installed RPM package; a Windows server inspecting a registry key |
-| **asset-list** | A cloud resource that is itself the thing being scanned. The bound-asset list is supplied as OBJECTs to the policy. | Azure subscription enumerating VMs; AWS account listing S3 buckets |
-
-The replay-hash scheme, dedup semantics, and host-binding rules all
-depend on this categorization:
-
-- **asset-internal** OBJECTs share a template across many hosts and
-  dedup naturally — identical intent + outcome produces one hash.
-- **asset-list** OBJECTs carry asset-specific fields
-  (e.g. `resource_id`) and produce distinct hashes per asset.
-
-See the `replay_hash_version = 2` scheme in
-[docs/10_ESP_Trust_Model_v1_2_0.md](docs/10_ESP_Trust_Model_v1_2_0.md)
-for how per-(criterion, OBJECT) hashing exploits this distinction.
 
 ---
 

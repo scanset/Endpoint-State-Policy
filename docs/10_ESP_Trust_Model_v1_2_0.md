@@ -54,10 +54,11 @@
 >    `compute_replay_hash_v2()`. The v1 scheme hashes one combined
 >    `(intent, contract, outcome)` per criterion; v2 hashes
 >    `(intent, contract, outcome)` per **(criterion, OBJECT)** pair.
->    Asset-internal OBJECTs (same template across many hosts, e.g. an
->    RPM check on RHEL9) collapse to one hash; asset-list OBJECTs
->    (distinct cloud resource per OBJECT) get one hash per asset. This
->    enables per-asset drift detection and remediation verification
+>    OBJECTs sharing a template across many hosts (e.g. an RPM check on
+>    RHEL9) collapse to one hash; OBJECTs carrying distinct per-asset
+>    fields (a distinct cloud resource per OBJECT) get one hash per
+>    asset. This enables per-asset drift detection and remediation
+>    verification
 >    without losing dedup. Cross-version hash comparison (v1 vs v2) is
 >    not meaningful — consumers MUST record `replay_hash_version`
 >    alongside the hash. The v1 scheme remains the default; existing

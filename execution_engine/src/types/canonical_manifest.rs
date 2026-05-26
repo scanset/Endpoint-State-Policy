@@ -32,9 +32,9 @@
 //! BTreeMap key (the object_id) is **stripped** — only the OBJECT's
 //! fields enter the hash. This gives two desired properties:
 //!
-//! - **Asset-internal dedup**: many hosts running the same
+//! - **Shared-template dedup**: many hosts running the same
 //!   policy with the same OBJECT template + identical outcome → one hash.
-//! - **Asset-list per-asset**: SET-expanded OBJECTs whose
+//! - **Per-asset distinct hashes**: SET-expanded OBJECTs whose
 //!   fields encode the asset reference (e.g. `resource_id`) naturally
 //!   produce distinct hashes per asset.
 //!
@@ -244,6 +244,33 @@ impl ReplayManifest {
         compute_hash(&policy_input)
     }
 
+    /// Recompute the v2 policy hash using **externally supplied** per-object
+    /// leaf hashes (e.g. the `ctn_object_hashes` persisted in
+    /// `evidence.ctn_results`) instead of recomputing them from this
+    /// manifest's own criteria outcomes.
+    ///
+    /// This is the on-demand verification path (see
+    /// `docs/verification/replay-hash-canonical-spec.md` §9): the policy
+    /// identity + CRI tree are reconstructed from the resolved policy+asset,
+    /// and the committed leaves are taken as-stored. The caller is responsible
+    /// for sorting being irrelevant — leaves are sorted here.
+    pub fn compute_replay_hash_v2_with_leaves(&self, leaf_hashes: &[String]) -> String {
+        let mut leaves = leaf_hashes.to_vec();
+        leaves.sort();
+
+        let policy_input = PolicyHashInputV2 {
+            schema_version: &self.schema_version,
+            policy_id: &self.policy_id,
+            platform: &self.platform,
+            criticality: &self.criticality,
+            control_mappings: &self.control_mappings,
+            cri_tree_structure: &self.tree_structure,
+            ctn_object_hashes: &leaves,
+        };
+
+        compute_hash(&policy_input)
+    }
+
     /// Dispatch to v1 or v2 based on `self.replay_hash_version`.
     /// Unknown versions fall back to v1 with the assumption that the
     /// caller's environment doesn't yet recognize the new shape.
@@ -389,9 +416,9 @@ impl CriterionReplay {
     /// This gives the dedup property: if two OBJECTs (in the same
     /// criterion or across criteria) have identical intent shape +
     /// identical OBJECT field values + identical outcome, they produce
-    /// the same hash. The SET-expanded asset-internal case (same OBJECT template
-    /// across many hosts) collapses; the SET-expanded asset-list case
-    /// (per-asset OBJECT fields like `resource_id`) naturally produces
+    /// the same hash. The SET-expanded shared-template case (same OBJECT
+    /// template across many hosts) collapses; the SET-expanded per-asset
+    /// case (per-asset OBJECT fields like `resource_id`) naturally produces
     /// distinct hashes per asset.
     pub fn compute_per_object_hash(&self, object_id: &str) -> Option<String> {
         let object_intent = self.intent.objects.get(object_id)?;
@@ -530,10 +557,10 @@ impl ReplayManifest {
 /// author named them. The OBJECT's *fields* (the query target) ARE
 /// included via `PerObjectIntent.object.fields`, which means:
 ///
-/// - **Shared template OBJECTs** (asset-internal, same `path` / `port` / etc.
-///   across many hosts) → one hash, dedupes naturally
-/// - **Asset-specific OBJECTs** (asset-list, distinct `resource_id` per
-///   asset from SET expansion) → one hash per asset, no dedup
+/// - **Shared template OBJECTs** (same `path` / `port` / etc. across many
+///   hosts) → one hash, dedupes naturally
+/// - **Asset-specific OBJECTs** (distinct `resource_id` per asset from SET
+///   expansion) → one hash per asset, no dedup
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerObjectReplay {
     pub intent: PerObjectIntent,
@@ -1170,8 +1197,8 @@ mod tests {
     /// Build a criterion with a single named OBJECT. The object_id is
     /// the BTreeMap key in `intent.objects` and `outcome.object_results`;
     /// `object_field_value` populates the OBJECT's `port` field so we
-    /// can simulate asset-list (per-asset reference) vs asset-internal (shared
-    /// template) shapes by varying it.
+    /// can simulate per-asset (distinct reference) vs shared-template
+    /// shapes by varying it.
     fn make_criterion_with_object(
         object_id: &str,
         object_field_value: serde_json::Value,
@@ -1261,7 +1288,7 @@ mod tests {
         assert!(crit.compute_per_object_hash("does_not_exist").is_none());
     }
 
-    /// asset-internal dedup: two OBJECTs with different identifiers but
+    /// shared-template dedup: two OBJECTs with different identifiers but
     /// identical OBJECT fields + identical outcome must hash to the
     /// same value. This is the "5 RHEL hosts running the same policy
     /// against /etc/sshd_config" property — they collapse to one hash.
@@ -1276,11 +1303,11 @@ mod tests {
 
         assert_eq!(
             hash_a, hash_b,
-            "asset-internal dedup violated: identical intent + outcome should produce identical hash"
+            "shared-template dedup violated: identical intent + outcome should produce identical hash"
         );
     }
 
-    /// asset-list per-asset: two OBJECTs with different field values
+    /// per-asset distinct hashes: two OBJECTs with different field values
     /// (different `resource_id` / `port` in our test stand-in) produce
     /// distinct hashes even when their outcomes match. This is correct
     /// — the asset reference is part of the assertion target.
@@ -1295,13 +1322,13 @@ mod tests {
 
         assert_ne!(
             hash_a, hash_b,
-            "asset-list per-asset violated: distinct OBJECT fields should produce distinct hashes"
+            "per-asset distinct hashes violated: distinct OBJECT fields should produce distinct hashes"
         );
     }
 
     /// Outcome flip on a single OBJECT changes that OBJECT's hash.
-    /// Distinct from asset-internal dedup test — here intent matches but outcome
-    /// diverges.
+    /// Distinct from the shared-template dedup test — here intent matches
+    /// but outcome diverges.
     #[test]
     fn test_per_object_hash_changes_on_outcome_flip() {
         let crit_pass = make_criterion_with_object("obj_a", serde_json::json!(22), true);

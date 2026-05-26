@@ -23,10 +23,10 @@
 > supersede the result-format tables here for v2.0.0 output.
 >
 > **v2.1.0** extends the DSL grammar: `SET_REF` is now a first-class
-> CTN content operand, letting an asset-list policy reference its
-> bound-asset list as a single SET block (see EBNF §7 and Symbol
-> Resolution). The wire schema additively bumps to `2.1.0` with a new
-> `replay_hash_version` field on `ResultEnvelope` (back-compat).
+> CTN content operand, letting a policy reference its bound-asset list
+> as a single SET block (see EBNF §7 and Symbol Resolution). The wire
+> schema additively bumps to `2.1.0` with a new `replay_hash_version`
+> field on `ResultEnvelope` (back-compat).
 >
 > **v2.2.0** adds an opt-in per-OBJECT replay hash scheme
 > (`replay_hash_version = 2`). v1 hash semantics are unchanged and

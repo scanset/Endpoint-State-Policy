@@ -10,7 +10,7 @@
 //! - The caller (typically a server) will wrap the returned `CollectedData`
 //!   in its own envelope and sign it as discovery evidence.
 //!
-//! For **evidence-gathering scans** — asset-list / asset-internal policy assertions with
+//! For **evidence-gathering scans** — policy assertions with
 //! pass/fail outcomes, control mappings, criticality, and the rest of the
 //! META block's audit context — continue to use the file-based path
 //! (`.esp` → lexer → parser → compiler → execute). That path is what

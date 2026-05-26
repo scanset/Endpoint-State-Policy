@@ -189,11 +189,18 @@ impl ExecutionEngine {
         // ====================================================================
         // BUILD REPLAY MANIFEST AND COMPUTE HASH (ONCE!)
         // ====================================================================
-        let replay_manifest =
-            self.build_replay_manifest(meta_block, &control_mappings, &tree_result);
+        // v2 per-CTN-per-OBJECT rollup. The v2 leaves are the same per-object
+        // hashes persisted to `evidence.ctn_results`, which lets the on-demand
+        // verifier recompute this policy hash from the stored leaves + a
+        // reconstructed intent/tree without per-field outcome
+        // (docs/verification/replay-hash-canonical-spec.md). The manifest stamps
+        // `replay_hash_version = 2` so downstream consumers route correctly.
+        let replay_manifest = self
+            .build_replay_manifest(meta_block, &control_mappings, &tree_result)
+            .with_replay_hash_version(2);
 
         // Compute replay hash ONCE - all output formats MUST use this directly
-        let replay_hash = replay_manifest.compute_replay_hash();
+        let replay_hash = replay_manifest.compute_replay_hash_versioned();
 
         log_debug!(
             "Computed replay hash",
@@ -277,6 +284,73 @@ impl ExecutionEngine {
     // ========================================================================
     // Replay Manifest Building
     // ========================================================================
+
+    /// Reconstruct the **intent + contract + tree-structure** layers of a
+    /// policy's `ReplayManifest` from the RESOLVED context alone — no
+    /// execution, no collectors. The outcome layer is a placeholder (empty
+    /// per-criterion state results), because the on-demand verification path
+    /// (`docs/verification/replay-hash-canonical-spec.md` §9) recomputes the
+    /// policy hash from externally-supplied stored leaf hashes via
+    /// `ReplayManifest::compute_replay_hash_v2_with_leaves`, and surfaces the
+    /// per-object verdict from `evidence.ctn_results` separately.
+    ///
+    /// The synthesized `TreeResult` mirrors `execute_tree` exactly
+    /// (`leaf`/`block`), so `build_replay_tree_structure` yields the identical
+    /// `ReplayTreeNode` that a real run would — i.e. the v2 `cri_tree_structure`
+    /// in the hash input is byte-identical.
+    pub fn reconstruct_intent_manifest(&self) -> Result<ReplayManifest, ExecutionError> {
+        let meta_block =
+            self.context
+                .metadata
+                .as_ref()
+                .ok_or_else(|| ExecutionError::ExecutorFailed {
+                    ctn_type: "metadata_extraction".to_string(),
+                    reason: "Missing metadata in execution context".to_string(),
+                })?;
+
+        let control_mapping_str =
+            meta_block
+                .control_mapping()
+                .ok_or_else(|| ExecutionError::ExecutorFailed {
+                    ctn_type: "metadata_extraction".to_string(),
+                    reason: "Missing control_mapping in metadata".to_string(),
+                })?;
+        let control_mappings =
+            ControlMapping::parse_from_meta(control_mapping_str).map_err(|e| {
+                ExecutionError::ExecutorFailed {
+                    ctn_type: "metadata_extraction".to_string(),
+                    reason: format!("Invalid control_mapping: {}", e),
+                }
+            })?;
+
+        let tree_result = Self::synth_tree_result(&self.context.criteria_tree);
+        Ok(self.build_replay_manifest(meta_block, &control_mappings, &tree_result))
+    }
+
+    /// Synthesize a `TreeResult` mirroring the resolved criteria tree with
+    /// empty execution results. Shape matches `execute_tree` so intent +
+    /// contract + tree-structure reconstruct identically; the outcome layer is
+    /// a placeholder and is not used by the leaf-based v2 recompute.
+    fn synth_tree_result(tree: &ExecutableCriteriaTree) -> TreeResult {
+        match tree {
+            ExecutableCriteriaTree::Criterion(crit) => {
+                let result = CtnExecutionResult::pass(
+                    crit.criterion_type.clone(),
+                    "intent-only reconstruction (no execution)".to_string(),
+                );
+                let ctn = CtnResult::new(crit.ctn_node_id, crit.criterion_type.clone(), result, 0);
+                TreeResult::leaf(ctn)
+            }
+            ExecutableCriteriaTree::Block {
+                logical_op,
+                negate,
+                children,
+            } => {
+                let child_results = children.iter().map(Self::synth_tree_result).collect();
+                TreeResult::block(*logical_op, *negate, child_results)
+            }
+        }
+    }
 
     /// Build the canonical replay manifest
     ///
@@ -888,6 +962,26 @@ impl ExecutionEngine {
                     );
                 }
             }
+        }
+
+        // Fallback: existence-level failures (object not found) and executors
+        // that decide their verdict outside the per-field comparison loop leave
+        // both maps empty, which renders as `{}` / `{}` in the operator's
+        // evidence — a content-free finding. Carry the CTN-level outcome so a
+        // finding always says *why* it failed. (Findings are not part of the
+        // replay manifest, so this does not affect any replay_hash.)
+        if expected_values.is_empty() && actual_values.is_empty() {
+            expected_values.insert(
+                "result".to_string(),
+                serde_json::Value::String("pass".to_string()),
+            );
+            actual_values.insert(
+                "result".to_string(),
+                serde_json::Value::String(format!(
+                    "{:?}: {}",
+                    ctn_result.status, ctn_result.message
+                )),
+            );
         }
 
         // Determine severity from CTN status

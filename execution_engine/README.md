@@ -325,9 +325,9 @@ What's skipped relative to the basic pipeline: `.esp` lexing/parsing,
 META validation, policy compilation, the criterion evaluation tree,
 and findings/outcome calculation. Use this **only** when the
 credential's grants define the scope and there is no pass/fail
-assertion to make. For evidence-gathering scans (asset-list /
-asset-internal policy assertions with pass/fail outcomes, control
-mappings, and audit context), continue to use the file-based pipeline
+assertion to make. For evidence-gathering scans (policy assertions
+with pass/fail outcomes, control mappings, and audit context),
+continue to use the file-based pipeline
 above — that's what produces a complete `AssessorPackage`.
 
 Public API: [`inline::InlineRequest`](src/inline.rs),

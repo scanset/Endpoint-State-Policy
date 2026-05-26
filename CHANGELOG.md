@@ -70,6 +70,14 @@ the signed-release pipeline.
   from the wire schema in 2.2.2). v2.0.0 cross-reference banners,
   Overview, Trust Model, Schema, vectors_v2 README, common/README all
   updated.
+- **Retired the `asset-internal` / `asset-list` policy-category
+  taxonomy** from documentation and code comments (README Policy
+  Categories section, Overview, Trust Model, execution_engine README,
+  `inline.rs`, `canonical_manifest.rs`). Terminology only — `SET_REF`,
+  the per-`(criterion, OBJECT)` replay-hash dedup behavior, and all
+  engine logic are unchanged. The dedup mechanism is now described in
+  behavior terms (shared-template vs per-asset OBJECTs). The historical
+  v2.1.0 / v2.2.0 entries below are left intact as release record.
 
 ### Removed
 
