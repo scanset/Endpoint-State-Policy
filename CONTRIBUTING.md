@@ -184,7 +184,7 @@ If you believe a change could impact security:
 - Explain why the change is safe
 
 Security issues should not be reported via public issues.  
-Please email: **curtis@scanset.io**
+Please email: **curtisdslone@gmail.com**
 
 ---
 

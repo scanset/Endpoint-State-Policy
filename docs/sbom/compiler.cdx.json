@@ -14,13 +14,13 @@
     "authors": [
       {
         "name": "Curtis Slone",
-        "email": "curtis@scanset.io"
+        "email": "curtisdslone@gmail.com"
       }
     ],
     "component": {
       "type": "application",
       "bom-ref": "path+file://./compiler#2.2.3",
-      "author": "Curtis Slone <curtis@scanset.io>",
+      "author": "Curtis Slone <curtisdslone@gmail.com>",
       "name": "compiler",
       "version": "2.2.3",
       "description": "ESP compiler for scanner SDK integration",
@@ -59,7 +59,7 @@
     {
       "type": "library",
       "bom-ref": "path+file://./common#2.2.3",
-      "author": "Curtis Slone <curtis@scanset.io>",
+      "author": "Curtis Slone <curtisdslone@gmail.com>",
       "name": "common",
       "version": "2.2.3",
       "description": "Common types and utilities shared across ESP crates",

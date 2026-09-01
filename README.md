@@ -11,7 +11,7 @@
 > [!NOTE]
 > ### 🚀 ProofLayer is now in public alpha — and it runs on this engine
 >
-> [**ProofLayer**](https://hub.docker.com/r/scanset/prooflayer-alpha-v0_1) is an
+> [**ProofLayer**](https://hub.docker.com/r/curtisDslone/prooflayer-alpha-v0_1) is an
 > **agentless continuous-compliance platform** that turns each scan into a
 > signed, replay-hashable, transparency-logged **proof** mapped to controls
 > (FedRAMP 20x KSI, NIST 800-53 / 800-171, CMMC). ESP is its policy language and
@@ -19,14 +19,14 @@
 > full platform. Pull it and evaluate in a couple of minutes:
 >
 > ```bash
-> docker run -d -p 8080:80 -p 9090:8081 scanset/prooflayer-alpha-v0_1:0.1-alpha
+> docker run -d -p 8080:80 -p 9090:8081 curtisDslone/prooflayer-alpha-v0_1:0.1-alpha
 > # → http://localhost:8080   (login: super-admin / prooflayer)
 > ```
 >
-> **Docker Hub:** <https://hub.docker.com/r/scanset/prooflayer-alpha-v0_1>
+> **Docker Hub:** <https://hub.docker.com/r/curtisDslone/prooflayer-alpha-v0_1>
 > &nbsp;·&nbsp; Alpha — non-FIPS, single-node, for evaluation, not production.
 > &nbsp;·&nbsp; Feedback / a platform or framework you need covered →
-> **contact@scanset.io**
+> **curtisdslone@gmail.com**
 
 ---
 
@@ -284,7 +284,7 @@ ESP answers: *"Is this endpoint in the required technical state?"*
 
 For building scanners that execute ESP policies, see the **ESP Agent SDK**:
 
-🔗 **[github.com/scanset/ESP-Agent-SDK](https://github.com/scanset/ESP-Agent-SDK)**
+🔗 **[github.com/CurtisDSlone/ESP-Agent-SDK](https://github.com/CurtisDSlone/ESP-Agent-SDK)**
 
 The SDK provides:
 - Reference CTN type implementations (file_metadata, file_content, tcp_listener, etc.)
@@ -296,15 +296,15 @@ The SDK provides:
 
 ## Design Partners Wanted
 
-**ScanSet** is building the Compliance Evidence Layer — infrastructure that produces cryptographically verifiable proof of compliance, continuously. We're seeking **design partners** to shape the orchestration and integration layers.
+**Curtis Slone** is building the Compliance Evidence Layer — infrastructure that produces cryptographically verifiable proof of compliance, continuously. We're seeking **design partners** to shape the orchestration and integration layers.
 
 ### What We're Building
 
-ESP is the policy engine. ScanSet is the infrastructure that operationalizes it:
+ESP is the policy engine. The Curtis Slone infrastructure operationalizes it:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    ScanSet Evidence Layer                           │
+│                  Curtis Slone Evidence Layer                        │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌─────────────┐     ┌─────────────────┐     ┌─────────────────┐   │
@@ -355,9 +355,9 @@ Compliance outcomes should be **provable, not explained**:
 
 ### Get Involved
 
-📧 **Contact**: curtis@scanset.io
+📧 **Contact**: curtisdslone@gmail.com
 
-🌐 **Learn more**: [scanset.io](https://scanset.io)
+🌐 **Learn more**: [curtisDslone.io](https://curtisDslone.io)
 
 We're not looking for customers yet — we're looking for partners who want to shape how compliance evidence infrastructure gets built.
 
@@ -430,7 +430,7 @@ Cross-compilation from Linux to Windows is supported without bundling OpenSSL.
 
 ### Reporting Vulnerabilities
 
-For security vulnerabilities, contact **curtis@scanset.io**.
+For security vulnerabilities, contact **curtisdslone@gmail.com**.
 
 ---
 
